@@ -9,8 +9,6 @@ Scans the TSX 60 universe mapped to liquid CBOE-listed tickers, pulls delayed op
 ## Run
 
 ```bash
-source .venv/bin/activate
-
 # Full scan (live CBOE data, ~50 symbols)
 python main.py
 
@@ -59,7 +57,6 @@ output/
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 ```
 

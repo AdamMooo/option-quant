@@ -15,7 +15,7 @@ TSX_TO_CBOE: dict[str, str] = {
     # Insurers
     "MFC.TO": "MFC",  # Manulife
     "SLF.TO": "SLF",  # Sun Life
-    "IFC.TO": "IFC",  # Intact Financial
+    # IFC.TO removed — CBOE returns 403 (no US-listed options)
     # Energy
     "ENB.TO": "ENB",  # Enbridge
     "TRP.TO": "TRP",  # TC Energy
@@ -27,7 +27,7 @@ TSX_TO_CBOE: dict[str, str] = {
     # Rail / Industrials
     "CNR.TO": "CNI",  # CN Rail (different CBOE ticker!)
     "CP.TO": "CP",    # CP Rail
-    "WSP.TO": "WSP",  # WSP Global
+    # WSP.TO removed — CBOE returns 403 (no US-listed options)
     "TRI.TO": "TRI",  # Thomson Reuters
     "BAM.TO": "BAM",  # Brookfield Asset Mgmt
     "BN.TO": "BN",    # Brookfield Corp
@@ -63,8 +63,41 @@ TSX_TO_CBOE: dict[str, str] = {
 # Reverse map: CBOE ticker → TSX ticker (for display purposes)
 CBOE_TO_TSX: dict[str, str] = {v: k for k, v in TSX_TO_CBOE.items()}
 
-# All CBOE tickers in the universe
-UNIVERSE: list[str] = sorted(TSX_TO_CBOE.values())
+# US universe — liquid options, accessible premiums for small accounts
+US_UNIVERSE: list[str] = sorted([
+    # Broad market ETFs — tightest spreads, most liquid
+    "SPY",   # S&P 500
+    "QQQ",   # Nasdaq 100
+    "IWM",   # Russell 2000 — lower price, great for small accounts
+    "DIA",   # Dow Jones
+    # Sector ETFs — directional macro plays, cheap premiums
+    "XLE",   # Energy
+    "XLF",   # Financials
+    "XLK",   # Technology
+    "XBI",   # Biotech — high IV, good for buying
+    # Commodities ETFs
+    "GLD",   # Gold
+    "SLV",   # Silver — very affordable
+    "GDX",   # Gold miners
+    "USO",   # Oil
+    # Rates / macro
+    "TLT",   # 20yr Treasuries
+    "HYG",   # High yield bonds
+    # Large caps — accessible strikes, very liquid options
+    "AAPL",
+    "AMD",   # Lower price than NVDA, high IV
+    "AMZN",
+    "BAC",   # Bank of America — cheap per contract
+    "F",     # Ford — very low premium, good starter
+    "META",
+    "NVDA",
+    "PLTR",  # Lower price, high IV
+    "SOFI",  # Low price, active options
+    "MSTR",  # High IV, bitcoin proxy
+])
+
+# Combined universe (TSX ADRs + US)
+UNIVERSE: list[str] = sorted(set(TSX_TO_CBOE.values()) | set(US_UNIVERSE))
 
 # Scoring weights (must sum to 1.0)
 SCORING_WEIGHTS = {

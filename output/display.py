@@ -10,6 +10,28 @@ from rich.text import Text
 console = Console(width=160)
 
 
+def print_macro_header(macro: dict) -> None:
+    from data.macro import vix_regime, term_structure
+
+    vix = macro.get("vix")
+    vix3m = macro.get("vix3m")
+    y10 = macro.get("yield_10y")
+    ff = macro.get("fed_funds")
+
+    regime = vix_regime(vix)
+    regime_style = {"low": "green", "normal": "yellow", "elevated": "bold yellow", "high": "bold red"}.get(regime, "dim")
+    ts = term_structure(vix, vix3m)
+    ts_style = "green" if ts == "contango" else "bold red" if ts == "backwardation" else "dim"
+
+    vix_str = f"[{regime_style}]VIX {_fmt(vix, '.1f')} ({regime})[/{regime_style}]"
+    vix3m_str = f"VIX3M {_fmt(vix3m, '.1f')}  [{ts_style}]{ts}[/{ts_style}]"
+    y10_str = f"10Y {_fmt(y10, '.2f')}%"
+    ff_str = f"Fed Funds {_fmt(ff, '.2f')}%"
+
+    console.print(f"  {vix_str}   {vix3m_str}   {y10_str}   {ff_str}", highlight=False)
+    console.print()
+
+
 def _score_style(score: float | None) -> str:
     if score is None:
         return "dim"

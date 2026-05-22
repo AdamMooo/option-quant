@@ -5,6 +5,10 @@ mx-options: TSX 60 options scanner (CBOE US-listed ADRs, USD).
 
 import argparse
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
 
 from config import (
     CBOE_TO_TSX,
@@ -12,6 +16,7 @@ from config import (
     MAX_SPREAD_PCT,
     RISK_FREE_RATE,
     UNIVERSE,
+    US_UNIVERSE,
     TSX_TO_CBOE,
 )
 from analysis import greeks as gk
@@ -20,6 +25,7 @@ from analysis import scorer
 from analysis import volatility as vol
 from data import fetcher
 from data import demo as demo_data
+from data import macro as macro_data
 from output import display
 
 
@@ -144,7 +150,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
             contracts = process_demo_symbol(cboe_ticker)
             all_contracts.extend(scorer.score_all(contracts))
     else:
-        tickers = UNIVERSE
+        if args.universe == "tsx":
+            tickers = sorted(TSX_TO_CBOE.values())
+        elif args.universe == "us":
+            tickers = US_UNIVERSE
+        else:
+            tickers = UNIVERSE
         display.print_info(f"Scanning {len(tickers)} symbols…")
         for cboe_ticker in tickers:
             display.print_info(f"  {cboe_ticker}…")
@@ -160,6 +171,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
         min_oi=args.min_oi,
         sort_by=args.sort,
     )
+
+    macro = macro_data.fetch_macro()
+    display.print_macro_header(macro)
 
     top = filtered[: args.top]
     display.print_ranked_table(top, title=f"Top {args.top} Options Opportunities")
@@ -223,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"Minimum open interest (default: {DEFAULT_MIN_OI})")
     p.add_argument("--refresh", action="store_true",
                    help="Bypass cache and fetch fresh data")
+    p.add_argument("--universe", choices=["all", "tsx", "us"], default="all",
+                   help="Which universe to scan: all (default), tsx, us")
     p.add_argument("--demo", action="store_true",
                    help="Use synthetic data (no network required)")
     return p

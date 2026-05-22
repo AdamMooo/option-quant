@@ -88,6 +88,24 @@ def fetch_spot_price(cboe_ticker: str) -> float:
     raise RuntimeError(f"Cannot determine spot price for {cboe_ticker}")
 
 
+def _parse_occ_symbol(occ: str) -> tuple[str, str, float] | None:
+    """
+    Decode an OCC option symbol: <root><YYMMDD><C|P><strike*1000 zero-padded to 8>.
+    Returns (expiry_iso, call_put, strike) or None on parse failure.
+    """
+    import re
+    m = re.search(r"(\d{6})([CP])(\d{8})$", occ)
+    if not m:
+        return None
+    date_str, call_put, strike_raw = m.groups()
+    try:
+        expiry = datetime.datetime.strptime(date_str, "%y%m%d").date()
+    except ValueError:
+        return None
+    strike = int(strike_raw) / 1000.0
+    return expiry.isoformat(), call_put, strike
+
+
 def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
     """
     Parses the CBOE JSON into a flat list of contract dicts.
@@ -97,6 +115,9 @@ def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
 
     If CBOE provides iv/greeks, they are used directly.
     Fields absent from CBOE are set to None (greeks.py fills them in).
+
+    CBOE now returns a flat list of contracts keyed by OCC symbol string
+    rather than nested expiration blocks.
     """
     data = fetch_options_chain(cboe_ticker, refresh=refresh)
     raw = data.get("data", {})
@@ -104,51 +125,45 @@ def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
     today = datetime.date.today()
 
     contracts = []
-    for exp_block in raw.get("options", []):
-        expiry_str = exp_block.get("expiration_date", "")
-        try:
-            expiry = datetime.date.fromisoformat(expiry_str)
-        except ValueError:
+    for opt in raw.get("options", []):
+        occ = opt.get("option", "")
+        parsed = _parse_occ_symbol(occ)
+        if parsed is None:
             continue
-        dte = (expiry - today).days
+        expiry_str, call_put, strike = parsed
+
+        dte = (datetime.date.fromisoformat(expiry_str) - today).days
         if dte < 0:
             continue
 
-        for opt in exp_block.get("option", []):
-            call_put = opt.get("option_type", "").upper()
-            if call_put not in ("C", "P"):
-                # Some CBOE responses use "call"/"put"
-                raw_type = opt.get("option_type", "")
-                call_put = "C" if raw_type.lower().startswith("c") else "P"
+        bid = opt.get("bid", 0.0) or 0.0
+        ask = opt.get("ask", 0.0) or 0.0
+        mid = (bid + ask) / 2 if (bid + ask) > 0 else None
+        spread_pct = ((ask - bid) / mid * 100) if (mid and mid > 0) else None
 
-            bid = opt.get("bid", 0.0) or 0.0
-            ask = opt.get("ask", 0.0) or 0.0
-            mid = (bid + ask) / 2 if (bid + ask) > 0 else None
-            spread_pct = ((ask - bid) / mid * 100) if (mid and mid > 0) else None
-
-            contracts.append(
-                {
-                    "ticker": cboe_ticker,
-                    "expiry": expiry_str,
-                    "dte": dte,
-                    "strike": opt.get("strike", 0.0),
-                    "type": call_put,
-                    "bid": bid,
-                    "ask": ask,
-                    "mid": mid,
-                    "last": opt.get("last_trade_price") or opt.get("last"),
-                    "volume": opt.get("volume", 0) or 0,
-                    "open_interest": opt.get("open_interest", 0) or 0,
-                    "iv": opt.get("iv") or opt.get("implied_volatility"),
-                    "delta": opt.get("delta"),
-                    "gamma": opt.get("gamma"),
-                    "theta": opt.get("theta"),
-                    "vega": opt.get("vega"),
-                    "rho": opt.get("rho"),
-                    "theoretical": opt.get("theoretical"),
-                    "spread_pct": spread_pct,
-                    "spot": spot,
-                }
-            )
+        contracts.append(
+            {
+                "ticker": cboe_ticker,
+                "expiry": expiry_str,
+                "dte": dte,
+                "strike": strike,
+                "type": call_put,
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "last": opt.get("last_trade_price") or opt.get("last"),
+                "volume": int(opt.get("volume", 0) or 0),
+                "open_interest": int(opt.get("open_interest", 0) or 0),
+                "iv": opt.get("iv") or opt.get("implied_volatility"),
+                "delta": opt.get("delta"),
+                "gamma": opt.get("gamma"),
+                "theta": opt.get("theta"),
+                "vega": opt.get("vega"),
+                "rho": opt.get("rho"),
+                "theoretical": opt.get("theo") or opt.get("theoretical"),
+                "spread_pct": spread_pct,
+                "spot": spot,
+            }
+        )
 
     return contracts

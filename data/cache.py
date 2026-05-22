@@ -31,6 +31,13 @@ def _conn() -> sqlite3.Connection:
             PRIMARY KEY (ticker, date)
         )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS macro_cache (
+            series_id TEXT PRIMARY KEY,
+            fetched_at REAL,
+            value REAL
+        )"""
+    )
     conn.commit()
     return conn
 
@@ -78,6 +85,25 @@ def upsert_iv_history(ticker: str, date: str, iv: float) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO iv_history VALUES (?, ?, ?)",
             (ticker, date, iv),
+        )
+
+
+def get_macro(series_id: str, ttl: float) -> float | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT fetched_at, value FROM macro_cache WHERE series_id = ?",
+            (series_id,),
+        ).fetchone()
+    if row and (time.time() - row[0]) < ttl:
+        return row[1]
+    return None
+
+
+def set_macro(series_id: str, value: float) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO macro_cache VALUES (?, ?, ?)",
+            (series_id, time.time(), value),
         )
 
 

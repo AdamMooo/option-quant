@@ -57,6 +57,29 @@ def iv_percentile(ticker: str, current_iv: float | None) -> float | None:
     return round(below / len(vals) * 100, 1)
 
 
+def iv_divergence(ivr: float | None, ivp: float | None) -> float | None:
+    """Absolute difference between IV Rank and IV Percentile."""
+    if ivr is None or ivp is None:
+        return None
+    return round(abs(ivr - ivp), 1)
+
+
+def trade_setup(ivr: float | None, ivp: float | None, vrp_val: float | None) -> str | None:
+    """Classify the candidate into a simple trade setup signal."""
+    if ivr is None or ivp is None or vrp_val is None:
+        return None
+
+    if ivr >= 70 and ivp >= 70 and vrp_val >= 0:
+        return "sell_vol"
+    if ivr <= 30 and ivp <= 30 and vrp_val <= 0:
+        return "buy_vol"
+    if ivr >= 70 and ivp < 55 and vrp_val >= 0:
+        return "rank_only"
+    if ivp >= 70 and ivr < 55 and vrp_val >= 0:
+        return "percentile_only"
+    return "neutral"
+
+
 def update_iv_history(ticker: str, iv: float | None) -> None:
     """Saves today's IV to history for future IVR / IVP calculations."""
     if iv is None:
@@ -106,6 +129,8 @@ def enrich_contract(
     contract["vrp"] = vrp(iv, hv_data.get("hv30"))
     contract["ivr"] = ivr_val
     contract["ivp"] = ivp_val
+    contract["iv_divergence"] = iv_divergence(ivr_val, ivp_val)
+    contract["setup_type"] = trade_setup(ivr_val, ivp_val, contract.get("vrp"))
     contract["mom20"] = round(mom20 * 100, 2) if mom20 is not None else None
     contract["mom60"] = round(mom60 * 100, 2) if mom60 is not None else None
     return contract

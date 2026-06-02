@@ -1,0 +1,50 @@
+{
+  "phase": "milestone-v2.0-derivative-algo",
+  "phase_dir": ".planning/phases/01-derivative-algo-transformation",
+  "padded_phase": "01",
+  "areas_total": 4,
+  "areas_completed": 3,
+  "areas_remaining": ["Monitor vs screener"],
+  "session_date": "2026-05-28",
+  "decisions": {
+    "strategy_type": {
+      "summary": "Long options (long calls or puts, 'naked' = uncovered directional bets). NOT a premium-selling screen.",
+      "details": [
+        "IVP percentile (not hard thresholds) determines when IV is cheap enough to buy — low IVP = low IV crush risk on entry",
+        "Goal: capture vol expansion + directional move combined (not one or the other)",
+        "Regime + macro provide directional conviction (which side: call vs put)",
+        "Per-stock IVP is the primary entry filter; regime is the environmental context"
+      ]
+    },
+    "regime_integration": {
+      "summary": "Read HMM output file from regime-detection project. Do NOT run the model inside derivative-algo.",
+      "details": [
+        "regime-detection runs separately (daily or weekly), exports its CSV",
+        "derivative-algo reads that file for: raw FRED features (yield slope T10Y2Y, NFCI, VIX level) + regime dwell context (how long in current state)",
+        "Display as macro overlay header alongside option candidates",
+        "Transition probabilities and regime label itself were NOT selected as primary — user prefers raw FRED context + dwell time",
+        "Concern: both model quality (HMM not reliable enough live) and operational (JAX/NumPyro too heavy to run daily)"
+      ]
+    },
+    "dte_target": {
+      "summary": "60-90 DTE as default (quarterly horizon). 21-45 DTE preserved as --dte-short mode.",
+      "details": [
+        "Primary mode: 60-90 DTE for macro/regime-driven longer-dated plays",
+        "Secondary mode: --dte-short flag for 21-45 DTE (original scanner behavior)",
+        "Clean break from old DTE_SWEET_MIN/MAX = 21/45 as primary"
+      ]
+    }
+  },
+  "deferred_ideas": [],
+  "discussion_log": [
+    {"area": "Strategy type", "q": "Buy vs sell vs both context-dependent", "answer": "Both context-dependent"},
+    {"area": "Strategy type", "q": "Primary signal for which side", "answer": "Individual stock IV rank (percentiles)"},
+    {"area": "Strategy type", "q": "User clarified: NOT selling — long options, IV crush risk assessment", "answer": "Freeform clarification: long options, use percentiles, vol is for assessing IV crush risk on entry"},
+    {"area": "Strategy type", "q": "Goal: vol expansion vs pure directional vs both", "answer": "Vol expansion + directional"},
+    {"area": "Regime integration", "q": "What is the 'ehh not so good' concern", "answer": "Both quality and operational"},
+    {"area": "Regime integration", "q": "How to consume regime signal", "answer": "Read HMM output file, don't run the model"},
+    {"area": "Regime integration", "q": "What to use from the output file", "answer": "Raw FRED features alongside + regime dwell context"},
+    {"area": "DTE target", "q": "Target DTE range", "answer": "60-90 DTE (quarterly)"},
+    {"area": "DTE target", "q": "Remove or keep 21-45 DTE", "answer": "Kept as --dte-short mode"}
+  ]
+}

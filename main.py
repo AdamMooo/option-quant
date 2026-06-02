@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mx-options: TSX 60 options scanner (CBOE US-listed ADRs, USD).
+mx-options: Nasdaq-100 options scanner (USD).
 """
 
 import argparse
@@ -109,8 +109,12 @@ def apply_filters(
 
     sort_key_map = {
         "score": lambda c: c.get("score") or 0,
+        "quality": lambda c: c.get("quality_score") or 0,
+        "direction": lambda c: c.get("direction_score") or 0,
         "ivr": lambda c: c.get("ivr") or 0,
-        "vrp": lambda c: -(c.get("vrp") or 0),  # most negative first
+        "ivp": lambda c: c.get("ivp") or 0,
+        "div": lambda c: c.get("iv_divergence") or 0,
+        "vrp": lambda c: abs(c.get("vrp") or 0),
         "gamma": lambda c: c.get("gamma") or 0,
         "volume": lambda c: c.get("volume") or 0,
     }
@@ -217,12 +221,12 @@ def cmd_symbol(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mx-options",
-        description="TSX 60 options scanner — CBOE US-listed ADRs (USD)",
+        description="Nasdaq-100 options scanner — USD-listed equity options",
     )
     p.add_argument("--symbol", "-s", metavar="TICKER",
                    help="Single-symbol deep-dive (TSX or CBOE ticker)")
-    p.add_argument("--top", type=int, default=20, metavar="N",
-                   help="Show top N results (default: 20)")
+    p.add_argument("--top", type=int, default=25, metavar="N",
+                   help="Show top N results (default: 25)")
     p.add_argument("--type", choices=["call", "put", "C", "P"],
                    help="Filter by option type")
     p.add_argument("--moneyness", choices=["atm", "otm", "itm"],
@@ -231,14 +235,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Minimum DTE (default: 0)")
     p.add_argument("--dte-max", type=int, default=365, metavar="DAYS",
                    help="Maximum DTE (default: 365)")
-    p.add_argument("--sort", choices=["score", "ivr", "vrp", "gamma", "volume"],
-                   default="score", help="Sort column (default: score)")
+    p.add_argument(
+        "--sort",
+        choices=["score", "quality", "direction", "ivr", "ivp", "div", "vrp", "gamma", "volume"],
+        default="score",
+        help="Sort column (default: score)",
+    )
     p.add_argument("--min-oi", type=int, default=DEFAULT_MIN_OI, metavar="N",
                    help=f"Minimum open interest (default: {DEFAULT_MIN_OI})")
     p.add_argument("--refresh", action="store_true",
                    help="Bypass cache and fetch fresh data")
-    p.add_argument("--universe", choices=["all", "tsx", "us"], default="all",
-                   help="Which universe to scan: all (default), tsx, us")
+    p.add_argument(
+        "--universe",
+        choices=["all", "tsx", "us"],
+        default="us",
+        help="Which universe to scan: us (default), tsx, all",
+    )
     p.add_argument("--demo", action="store_true",
                    help="Use synthetic data (no network required)")
     return p

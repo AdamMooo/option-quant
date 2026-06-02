@@ -1,0 +1,11 @@
+{
+  "workflow_mode": "gsd",
+  "planning_level": "phase",
+  "research_focus": [
+    "signal validation",
+    "quality vs direction",
+    "live validation instrumentation",
+    "CLI-first reliability"
+  ],
+  "preferred_phase_output": "documents"
+}

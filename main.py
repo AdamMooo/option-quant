@@ -53,6 +53,16 @@ def process_symbol(cboe_ticker: str, refresh: bool) -> list[dict]:
     mom20 = vol.momentum(price_history, 20) if price_history else None
     mom60 = vol.momentum(price_history, 60) if price_history else None
 
+    # Technical indicators for direction scoring
+    try:
+        spy_history = fetcher.fetch_spy_history()
+    except Exception:
+        spy_history = []
+    technicals = vol.compute_technicals(price_history, spy_history) if price_history else {}
+
+    # Earnings proximity
+    days_to_earnings = fetcher.fetch_next_earnings(cboe_ticker)
+
     spot = contracts[0].get("spot") if contracts else None
     atm = mx.atm_iv(contracts, spot)
     mx.update_iv_history(cboe_ticker, atm)
@@ -63,6 +73,9 @@ def process_symbol(cboe_ticker: str, refresh: bool) -> list[dict]:
     for c in contracts:
         c = gk.fill_greeks(c, RISK_FREE_RATE)
         c = mx.enrich_contract(c, hv_data, mom20, mom60, ivr_val, ivp_val)
+        # Attach technicals + earnings to each contract
+        c.update(technicals)
+        c["days_to_earnings"] = days_to_earnings
         enriched.append(c)
 
     return enriched
@@ -76,6 +89,7 @@ def apply_filters(
     dte_max: int,
     min_oi: int,
     sort_by: str,
+    min_score: float = 0.0,
 ) -> list[dict]:
     filtered = []
     for c in contracts:
@@ -86,6 +100,8 @@ def apply_filters(
             continue
         delta = abs(c.get("delta") or 0)
         if delta > 0.95:  # skip deep ITM (delta near 1)
+            continue
+        if min_score > 0 and (c.get("score") or 0) < min_score:
             continue
         if (c.get("open_interest") or 0) < min_oi:
             continue
@@ -180,13 +196,21 @@ def cmd_scan(args: argparse.Namespace) -> None:
         dte_max=args.dte_max,
         min_oi=args.min_oi,
         sort_by=args.sort,
+        min_score=args.min_score,
     )
 
     macro = macro_data.fetch_macro()
     display.print_macro_header(macro)
 
     top = filtered[: args.top]
-    display.print_ranked_table(top, title=f"Top {args.top} Options Opportunities")
+    count = len(top)
+    if count == 0:
+        title = "No opportunities meet threshold"
+    elif args.min_score > 0:
+        title = f"{count} Opportunit{'y' if count == 1 else 'ies'} (score ≥ {args.min_score:.0f})"
+    else:
+        title = f"Top {count} Options Opportunities"
+    display.print_ranked_table(top, title=title)
 
 
 def cmd_symbol(args: argparse.Namespace) -> None:
@@ -249,6 +273,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--min-oi", type=int, default=DEFAULT_MIN_OI, metavar="N",
                    help=f"Minimum open interest (default: {DEFAULT_MIN_OI})")
+    p.add_argument("--min-score", type=float, default=65.0, metavar="N",
+                   help="Minimum composite score to show (default: 65, use 0 to disable)")
     p.add_argument("--refresh", action="store_true",
                    help="Bypass cache and fetch fresh data")
     p.add_argument(

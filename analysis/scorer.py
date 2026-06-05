@@ -68,12 +68,100 @@ def _dte_score(dte: int | None) -> float:
     return _clamp(100 - (dte - DTE_SWEET_MAX) / (180 - DTE_SWEET_MAX) * 100)
 
 
-def _momentum_score(mom20: float | None, opt_type: str) -> float:
-    """Positive momentum favors calls, negative favors puts. +/-10% maps to 0–100."""
-    if mom20 is None:
+def _ma_alignment_score(price: float | None, ma20: float | None, ma50: float | None, ma200: float | None, opt_type: str) -> float:
+    """
+    Score based on how many MAs the price is above (bullish) or below (bearish).
+    Calls: price above MAs = high score. Puts: price below MAs = high score.
+    """
+    if price is None:
         return 50.0
-    signed = mom20 if opt_type == "C" else -mom20
-    return _clamp(50 + signed * 500)
+    mas = [ma for ma in (ma20, ma50, ma200) if ma is not None]
+    if not mas:
+        return 50.0
+    bullish_count = sum(1 for ma in mas if price > ma)
+    bear_count = len(mas) - bullish_count
+    if opt_type == "C":
+        return _clamp(bullish_count / len(mas) * 100)
+    else:
+        return _clamp(bear_count / len(mas) * 100)
+
+
+def _rsi_score(rsi: float | None, opt_type: str) -> float:
+    """
+    Calls score high when RSI < 40 (oversold, bounce potential).
+    Puts score high when RSI > 60 (overbought, mean-revert potential).
+    Neutral zone (40-60) scores ~50 for both.
+    """
+    if rsi is None:
+        return 50.0
+    if opt_type == "C":
+        if rsi <= 30:
+            return 100.0
+        if rsi <= 40:
+            return _clamp(100 - (rsi - 30) * 5)
+        if rsi <= 60:
+            return 50.0
+        # Calls lose score as RSI gets overbought
+        return _clamp(50 - (rsi - 60) * 2.5)
+    else:
+        if rsi >= 70:
+            return 100.0
+        if rsi >= 60:
+            return _clamp(100 - (70 - rsi) * 5)
+        if rsi >= 40:
+            return 50.0
+        return _clamp(50 - (40 - rsi) * 2.5)
+
+
+def _momentum_confluence_score(mom20: float | None, mom60: float | None, opt_type: str) -> float:
+    """
+    Both timeframes agree and point the right direction = high score.
+    Disagreement = penalized. Magnitude matters.
+    """
+    if mom20 is None and mom60 is None:
+        return 50.0
+    # Use available signals
+    signals = [m for m in (mom20, mom60) if m is not None]
+    if opt_type == "P":
+        signals = [-s for s in signals]
+    avg = sum(signals) / len(signals)
+    # Confluence bonus: both same direction
+    if len(signals) == 2 and (signals[0] > 0) == (signals[1] > 0):
+        multiplier = 1.2
+    else:
+        multiplier = 0.7
+    return _clamp(50 + avg * 500 * multiplier)
+
+
+def _rs_score(rs20: float | None, opt_type: str) -> float:
+    """
+    Relative strength vs SPY over 20 days.
+    Calls: outperforming SPY = good. Puts: underperforming = good.
+    +/-5% RS maps roughly to 0-100.
+    """
+    if rs20 is None:
+        return 50.0
+    signed = rs20 if opt_type == "C" else -rs20
+    return _clamp(50 + signed * 1000)
+
+
+def _earnings_score(days_to_earnings: int | None) -> float:
+    """
+    Penalize hard when earnings are imminent — direction thesis gets overwhelmed by event risk.
+    < 7 days: 0 (don't trade direction into earnings)
+    7-14 days: heavy penalty
+    14-21 days: moderate penalty
+    > 21 days: no penalty (full score)
+    """
+    if days_to_earnings is None:
+        return 75.0  # unknown: slight discount vs confirmed-clear
+    if days_to_earnings < 7:
+        return 0.0
+    if days_to_earnings < 14:
+        return _clamp((days_to_earnings - 7) / 7 * 40)
+    if days_to_earnings < 21:
+        return _clamp(40 + (days_to_earnings - 14) / 7 * 35)
+    return 100.0
 
 
 def quality_score(c: dict) -> float:
@@ -91,8 +179,22 @@ def quality_score(c: dict) -> float:
 
 
 def direction_score(c: dict) -> float:
-    """Momentum-based directional validation score."""
-    return round(_momentum_score(c.get("mom20"), c.get("type", "C")), 1)
+    """
+    Multi-factor directional alignment score (0-100).
+    Weights: MA alignment 25%, RSI 20%, momentum confluence 20%, RS vs SPY 20%, earnings 15%.
+    A contract only scores high when multiple independent factors agree.
+    """
+    opt_type = c.get("type", "C")
+    price = c.get("price") or c.get("spot")
+
+    ma = _ma_alignment_score(price, c.get("ma20"), c.get("ma50"), c.get("ma200"), opt_type)
+    rsi = _rsi_score(c.get("rsi14"), opt_type)
+    mom = _momentum_confluence_score(c.get("mom20"), c.get("mom60"), opt_type)
+    rs = _rs_score(c.get("rs20"), opt_type)
+    earn = _earnings_score(c.get("days_to_earnings"))
+
+    score = ma * 0.25 + rsi * 0.20 + mom * 0.20 + rs * 0.20 + earn * 0.15
+    return round(score, 1)
 
 
 def score_contract(c: dict) -> float:

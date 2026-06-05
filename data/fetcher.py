@@ -1,10 +1,12 @@
 """
-Data fetching layer. Two sources:
-  - CBOE CDN: delayed options chains for US-listed Canadian ADRs
+Data fetching layer. Sources:
+  - CBOE CDN: delayed options chains
   - yfinance: daily price history for HV calculation
+  - Finnhub: next earnings date
 """
 
 import datetime
+import os
 import time
 
 import requests
@@ -12,6 +14,9 @@ import yfinance as yf
 
 from config import CACHE_TTL_OPTIONS, CACHE_TTL_PRICES, CBOE_API_URL
 from data import cache
+
+_FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
+_FINNHUB_TTL = 6 * 60 * 60  # 6 hours
 
 _HEADERS = {
     "User-Agent": (
@@ -86,6 +91,71 @@ def fetch_spot_price(cboe_ticker: str) -> float:
     if hist:
         return hist[-1]["close"]
     raise RuntimeError(f"Cannot determine spot price for {cboe_ticker}")
+
+
+def fetch_next_earnings(cboe_ticker: str) -> int | None:
+    """
+    Returns days until next earnings, or None if unknown.
+    Uses Finnhub earnings calendar. Results cached 6h.
+    """
+    if not _FINNHUB_KEY:
+        return None
+
+    cache_key = f"earnings_{cboe_ticker}"
+    cached = cache.get_generic(cache_key, _FINNHUB_TTL)
+    if cached is not None:
+        return cached
+
+    today = datetime.date.today()
+    to_date = today + datetime.timedelta(days=90)
+    url = (
+        f"https://finnhub.io/api/v1/calendar/earnings"
+        f"?from={today}&to={to_date}&symbol={cboe_ticker}"
+        f"&token={_FINNHUB_KEY}"
+    )
+    try:
+        resp = requests.get(url, timeout=8)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        events = data.get("earningsCalendar", [])
+        if not events:
+            cache.set_generic(cache_key, None)
+            return None
+        # First upcoming event
+        dates = sorted(
+            e["date"] for e in events if e.get("date") and e["date"] >= str(today)
+        )
+        if not dates:
+            cache.set_generic(cache_key, None)
+            return None
+        next_date = datetime.date.fromisoformat(dates[0])
+        days_away = (next_date - today).days
+        cache.set_generic(cache_key, days_away)
+        return days_away
+    except Exception:
+        return None
+
+
+def fetch_spy_history(days: int = 100) -> list[dict]:
+    """Returns SPY price history for relative strength calculation."""
+    cache_key = "SPY_prices"
+    cached = cache.get_prices(cache_key, CACHE_TTL_PRICES)
+    if cached is not None:
+        return cached
+
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=days)
+    ticker = yf.Ticker("SPY")
+    hist = ticker.history(start=start.isoformat(), end=end.isoformat(), auto_adjust=True)
+    if hist.empty:
+        return []
+    records = [
+        {"date": str(idx.date()), "close": float(row["Close"])}
+        for idx, row in hist.iterrows()
+    ]
+    cache.set_prices(cache_key, records)
+    return records
 
 
 def _parse_occ_symbol(occ: str) -> tuple[str, str, float] | None:

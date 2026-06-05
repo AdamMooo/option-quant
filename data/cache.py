@@ -107,6 +107,15 @@ def set_macro(series_id: str, value: float) -> None:
         )
 
 
+def get_generic(key: str, ttl: float) -> object:
+    """General-purpose cache using price_cache table with a prefixed key."""
+    return get_prices(f"__generic_{key}", ttl)
+
+
+def set_generic(key: str, value: object) -> None:
+    set_prices(f"__generic_{key}", value)
+
+
 def get_iv_history(ticker: str) -> list[tuple[str, float]]:
     """Returns list of (date, iv) sorted by date."""
     with _conn() as conn:

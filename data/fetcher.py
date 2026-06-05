@@ -154,7 +154,7 @@ def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
                 "last": opt.get("last_trade_price") or opt.get("last"),
                 "volume": int(opt.get("volume", 0) or 0),
                 "open_interest": int(opt.get("open_interest", 0) or 0),
-                "iv": opt.get("iv") or opt.get("implied_volatility"),
+                "iv": round((opt.get("iv") or opt.get("implied_volatility") or 0) * 100, 2) or None,
                 "delta": opt.get("delta"),
                 "gamma": opt.get("gamma"),
                 "theta": opt.get("theta"),

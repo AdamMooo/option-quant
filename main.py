@@ -81,6 +81,12 @@ def apply_filters(
     for c in contracts:
         if c.get("spread_pct") is not None and c["spread_pct"] > MAX_SPREAD_PCT:
             continue
+        iv = c.get("iv") or 0
+        if iv <= 0 or iv > 150:  # skip zero-IV and deep ITM artifacts
+            continue
+        delta = abs(c.get("delta") or 0)
+        if delta > 0.95:  # skip deep ITM (delta near 1)
+            continue
         if (c.get("open_interest") or 0) < min_oi:
             continue
         if opt_type and c.get("type") != opt_type.upper():

@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "/home/adam/dev/option-quant/.venv/bin/python",
+  "python.terminal.activateEnvironment": false,
+  "terminal.integrated.automationProfile.linux": "bash",
+  "terminal.integrated.defaultProfile.linux": "bash"
+}

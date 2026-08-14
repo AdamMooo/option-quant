@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 .cache/
 *.db
+*.db-wal
+*.db-shm
+archive/
 .env
 .venv/
 *.egg-info/

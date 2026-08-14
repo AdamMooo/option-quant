@@ -38,12 +38,31 @@ The clone is at upstream `26a655a` and **still contains the deleted-by-decision 
 scanner, the composite score, the TSX map and the direction factors. See `options-quant.md` for the
 itemized removal list. `.planning/` is history, not direction.
 
-## Run (current, pre-refactor)
+## Run
 
 ```bash
-python main.py --symbol SHOP     # single-symbol view — the mode that survives
-python main.py --demo            # synthetic data, no network
+python main.py SHOP                        # the view (also appends a snapshot)
+python main.py SHOP --moneyness atm --dte-min 21 --dte-max 45
+python main.py SHOP --demo                 # synthetic data, no network
+
+python archive.py capture AAPL MSFT NVDA   # append snapshots on demand
+python archive.py capture --from-archive   # re-capture everything already tracked
+python archive.py status                   # coverage, readiness, disk size
 ```
+
+Capture on a schedule — the archive only becomes useful with daily coverage, and a day not
+captured is gone for good.
+
+## The archive is append-only
+
+`data/archive.py` (`archive/chains.db`) is the long-lived asset; `data/cache.py` (`.cache/`) is
+disposable. Never mix them.
+
+- INSERT only. No UPDATE, no DELETE, no INSERT OR REPLACE. SQLite triggers enforce it.
+- Store observations; derive everything else on read. DTE, VRP, moneyness and rank are not columns.
+- Never write synthetic (`--demo`) data to the archive.
+- `captured_at` (our fetch time) and `source_ts` (the exchange's stamp) are different facts. Do not
+  collapse them.
 
 ## Environment
 

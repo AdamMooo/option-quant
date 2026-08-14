@@ -64,17 +64,17 @@ justified."
 
 ## Point-in-time discipline
 
-Adopted from the sibling repos, because the inherited code violates it structurally:
+Adopted from the sibling repos, because the inherited code violated it structurally.
 
-- `yfinance` with `auto_adjust=True` returns **retroactively dividend-adjusted** closes. Realized
-  vol computed from them is not what was observable at the time.
-- `datetime.date.today()` appears throughout the fetch and parse path, so cached rows carry no
-  as-of stamp distinguishable from run date.
-- The IV history table is keyed by *run date*, not observation date.
+| Leak | State |
+|---|---|
+| IV history keyed by *run date* with `INSERT OR REPLACE` — second run of the day overwrote the first | **CLOSED** 2026-08-14. Table deleted; archive is append-only with a regression test. |
+| No as-of stamp distinguishable from run date | **CLOSED** 2026-08-14. `source_ts` (exchange) and `captured_at` (fetch) stored separately. |
+| `yfinance auto_adjust=True` returns retroactively dividend-adjusted closes; realized vol from them is not what was observable | **LATENT.** Fixed *going forward* — unadjusted OHLCV is now captured per snapshot. But `analysis/volatility.py` still reads yfinance for history predating the archive, and will until the archive is deep enough to replace it. Anything computed from that path today is not point-in-time valid. |
+| Realized vol compared against implied over a *different* window | **OPEN.** See the AAPL finding below. |
 
-Any backtest built on the current cache is contaminated by construction. A leak register in
-`docs/POINT-IN-TIME-DISCIPLINE.md` follows the format used by
-[[equity-cover-call-strategy-single-stock]].
+A fuller leak register in `docs/POINT-IN-TIME-DISCIPLINE.md`, in the format used by
+[[equity-cover-call-strategy-single-stock]], follows once there are enough entries to warrant it.
 
 ## What survives from the inherited code
 
@@ -158,7 +158,29 @@ removed, 619 added. Tests pass offline (6); live CBOE path verified against AAPL
 to 30d realized, a jump caution when one day dominates the realized window, IV history depth,
 earnings proximity, recent news, and the filtered chain with Greeks and liquidity.
 
-**Next: the append-only chain archive.** Nothing else should be built first.
+**Archive built 2026-08-14.** `data/archive.py` + `archive.py` CLI. Append-only enforced by SQLite
+triggers, not by convention — `UPDATE` and `DELETE` raise on all three tables. Verified live: four
+symbols captured, re-capture appends rather than clobbers, `main.py` snapshots every symbol you
+look at.
+
+CBOE turned out to supply three things the old code ignored:
+
+| Field | Why it matters |
+|---|---|
+| `timestamp` | The exchange's own quote time. Stored as `source_ts`, separate from our `captured_at`. Conflating those two is how lookahead gets in. |
+| `iv30` | CBOE's **constant-maturity** 30-day IV. Now the basis for IVR/IVP instead of a nearest-ATM front-month contract, which rolls between expiries and so moves when the calendar moves rather than when vol does. |
+| Underlying OHLCV | **Unadjusted**, captured at snapshot time. This is the permanent fix for the `yfinance auto_adjust` leak — going forward there is a price series that cannot be retroactively rewritten. |
+
+The old `iv_history` table is gone. It used `INSERT OR REPLACE` keyed on run date, so a second run
+in a day silently overwrote the first. There is now a regression test for exactly that.
+
+Storage: ~149 bytes per contract row, ~3,300 contracts per symbol per snapshot. Daily capture of 20
+symbols is roughly **2.5 GB/year**. Acceptable for now; if it needs trimming the knob is skipping
+zero-OI contracts at capture, which is a decision that cannot be undone, so it is not the default.
+
+**Next: neither analytics nor Layer 2 — coverage.** The archive is worth exactly as much as the
+number of days in it, and a day not captured is unrecoverable. Everything else is downstream of
+getting a scheduled daily capture running.
 
 ### Found during the deletion pass
 

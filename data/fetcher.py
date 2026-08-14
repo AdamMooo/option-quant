@@ -207,7 +207,17 @@ def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
     CBOE now returns a flat list of contracts keyed by OCC symbol string
     rather than nested expiration blocks.
     """
+    return parse_chain_json(cboe_ticker, fetch_options_chain(cboe_ticker, refresh=refresh))
+
+
+def fetch_chain_with_raw(cboe_ticker: str, refresh: bool = False) -> tuple[dict, list[dict]]:
+    """Both the raw CBOE JSON and the parsed contracts. The archive needs the raw
+    payload for its exchange timestamp and underlying OHLCV."""
     data = fetch_options_chain(cboe_ticker, refresh=refresh)
+    return data, parse_chain_json(cboe_ticker, data)
+
+
+def parse_chain_json(cboe_ticker: str, data: dict) -> list[dict]:
     raw = data.get("data", {})
     spot = raw.get("current_price", None)
     today = datetime.date.today()
@@ -239,7 +249,10 @@ def parse_options_chain(cboe_ticker: str, refresh: bool = False) -> list[dict]:
                 "bid": bid,
                 "ask": ask,
                 "mid": mid,
+                "bid_size": opt.get("bid_size"),
+                "ask_size": opt.get("ask_size"),
                 "last": opt.get("last_trade_price") or opt.get("last"),
+                "last_trade_time": opt.get("last_trade_time"),
                 "volume": int(opt.get("volume", 0) or 0),
                 "open_interest": int(opt.get("open_interest", 0) or 0),
                 "iv": round((opt.get("iv") or opt.get("implied_volatility") or 0) * 100, 2) or None,

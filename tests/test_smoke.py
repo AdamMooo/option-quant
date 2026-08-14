@@ -8,7 +8,27 @@ import main
 from analysis import greeks as gk
 from analysis import metrics as mx
 from analysis import volatility as vol
-from data import demo
+from data import archive, demo
+
+
+@pytest.fixture
+def temp_archive(tmp_path, monkeypatch):
+    """Point the archive at a throwaway DB so tests never touch the real one."""
+    monkeypatch.setattr(archive, "DB_PATH", tmp_path / "chains.db")
+    return archive
+
+
+def _fake_raw(ticker="TEST", iv30=25.0):
+    return {
+        "timestamp": "2026-08-14T13:33:24",
+        "symbol": ticker,
+        "data": {
+            "current_price": 100.0, "iv30": iv30,
+            "open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0,
+            "prev_day_close": 99.5, "volume": 1_000_000,
+            "bid": 99.99, "ask": 100.01, "last_trade_time": "2026-08-14T13:33:00",
+        },
+    }
 
 
 def test_demo_pipeline_produces_enriched_contracts():
@@ -66,3 +86,56 @@ def test_filters_narrow_the_chain():
     # chain sort is (dte, type, strike)
     keys = [(c["dte"], c["type"], c["strike"]) for c in calls]
     assert keys == sorted(keys)
+
+
+def test_archive_round_trips_a_snapshot(temp_archive):
+    contracts = demo.make_chain("TEST", spot=100.0)
+    sid = temp_archive.write_snapshot("TEST", _fake_raw(), contracts)
+
+    assert sid is not None
+    rows = temp_archive.summary("TEST")
+    assert rows[0]["snapshots"] == 1
+    assert rows[0]["trading_days"] == 1
+    # quote_date comes from the exchange timestamp, not from today's date
+    assert rows[0]["first_date"] == "2026-08-14"
+
+
+def test_archive_refuses_update_and_delete(temp_archive):
+    contracts = demo.make_chain("TEST", spot=100.0)
+    temp_archive.write_snapshot("TEST", _fake_raw(), contracts)
+
+    conn = temp_archive._conn()
+    for sql in (
+        "UPDATE snapshots SET iv30 = 999",
+        "DELETE FROM snapshots",
+        "UPDATE contracts SET iv = 999",
+        "DELETE FROM contracts",
+    ):
+        with pytest.raises(Exception, match="append-only"):
+            conn.execute(sql)
+    conn.close()
+
+
+def test_second_capture_same_day_appends_rather_than_clobbers(temp_archive):
+    """The failure mode of the old iv_history table: INSERT OR REPLACE on run date."""
+    contracts = demo.make_chain("TEST", spot=100.0)
+    temp_archive.write_snapshot("TEST", _fake_raw(iv30=25.0), contracts)
+    temp_archive.write_snapshot("TEST", _fake_raw(iv30=31.0), contracts)
+
+    rows = temp_archive.summary("TEST")
+    assert rows[0]["snapshots"] == 2
+    assert rows[0]["trading_days"] == 1
+
+    # One observation per date for ranking purposes — the latest capture wins,
+    # but the earlier one is still on disk.
+    series = temp_archive.iv30_series("TEST", days=36500)
+    assert len(series) == 1
+    assert series[0][1] == 31.0
+
+
+def test_iv_rank_returns_none_below_threshold(temp_archive):
+    contracts = demo.make_chain("TEST", spot=100.0)
+    temp_archive.write_snapshot("TEST", _fake_raw(), contracts)
+    assert mx.iv_rank("TEST", 25.0) is None
+    assert mx.iv_percentile("TEST", 25.0) is None
+    assert mx.iv_history_depth("TEST") == 1

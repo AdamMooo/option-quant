@@ -1,3 +1,12 @@
+"""
+Disposable TTL cache. Safe to delete at any time.
+
+Anything that must survive belongs in data/archive.py instead. The `iv_history`
+table that used to live here was INSERT OR REPLACE keyed on run date, so a second
+run in the same day silently overwrote the first — it was moved to the append-only
+archive 2026-08-14.
+"""
+
 import json
 import sqlite3
 import time
@@ -21,14 +30,6 @@ def _conn() -> sqlite3.Connection:
             ticker TEXT PRIMARY KEY,
             fetched_at REAL,
             json_blob TEXT
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS iv_history (
-            ticker TEXT,
-            date TEXT,
-            iv REAL,
-            PRIMARY KEY (ticker, date)
         )"""
     )
     conn.execute(
@@ -80,14 +81,6 @@ def set_prices(ticker: str, records: list) -> None:
         )
 
 
-def upsert_iv_history(ticker: str, date: str, iv: float) -> None:
-    with _conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO iv_history VALUES (?, ?, ?)",
-            (ticker, date, iv),
-        )
-
-
 def get_macro(series_id: str, ttl: float) -> float | None:
     with _conn() as conn:
         row = conn.execute(
@@ -114,13 +107,3 @@ def get_generic(key: str, ttl: float) -> object:
 
 def set_generic(key: str, value: object) -> None:
     set_prices(f"__generic_{key}", value)
-
-
-def get_iv_history(ticker: str) -> list[tuple[str, float]]:
-    """Returns list of (date, iv) sorted by date."""
-    with _conn() as conn:
-        rows = conn.execute(
-            "SELECT date, iv FROM iv_history WHERE ticker = ? ORDER BY date",
-            (ticker,),
-        ).fetchall()
-    return rows

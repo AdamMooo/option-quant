@@ -5,13 +5,12 @@ These describe where the option market currently sits. None of them is a
 recommendation — the `trade_setup` classifier that emitted "sell_vol"/"buy_vol"
 labels from hand-set thresholds was removed 2026-08-14.
 
-IVR and IVP are only as good as the local IV history, which today is thin.
-Below 10 stored observations they return None rather than guessing.
+IVR and IVP read their history from the append-only archive (data/archive.py),
+not from a mutable cache table. They are only as good as that archive, which today
+is thin — below 10 stored observations they return None rather than guessing.
 """
 
-import datetime
-
-from data import cache
+from data import archive
 
 
 def vrp(iv_pct: float | None, hv30: float | None) -> float | None:
@@ -24,21 +23,23 @@ def vrp(iv_pct: float | None, hv30: float | None) -> float | None:
     return round(iv_pct - hv30, 2)
 
 
+MIN_IV_OBSERVATIONS = 10
+
+
 def iv_rank(ticker: str, current_iv: float | None) -> float | None:
     """
     IV Rank (0-100): position of current IV within its trailing 52-week range.
-    Needs >= 10 stored observations; returns None otherwise.
+
+    Range-based, so two outlier days set both endpoints and everything else is
+    scored against them. Compare with iv_percentile, which uses the whole
+    distribution — a wide gap between the two means the range is being set by
+    a handful of days.
     """
     if current_iv is None:
         return None
 
-    rows = cache.get_iv_history(ticker)
-    if len(rows) < 10:
-        return None
-
-    cutoff = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
-    vals = [iv for date, iv in rows if date >= cutoff]
-    if not vals:
+    vals = [iv for _, iv in archive.iv30_series(ticker)]
+    if len(vals) < MIN_IV_OBSERVATIONS:
         return None
 
     lo, hi = min(vals), max(vals)
@@ -49,19 +50,13 @@ def iv_rank(ticker: str, current_iv: float | None) -> float | None:
 
 def iv_percentile(ticker: str, current_iv: float | None) -> float | None:
     """
-    IV Percentile (0-100): share of stored trailing-year observations below current IV.
-    Needs >= 10 stored observations; returns None otherwise.
+    IV Percentile (0-100): share of trailing-year observations below current IV.
     """
     if current_iv is None:
         return None
 
-    rows = cache.get_iv_history(ticker)
-    if len(rows) < 10:
-        return None
-
-    cutoff = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
-    vals = [iv for date, iv in rows if date >= cutoff]
-    if not vals:
+    vals = [iv for _, iv in archive.iv30_series(ticker)]
+    if len(vals) < MIN_IV_OBSERVATIONS:
         return None
 
     below = sum(1 for v in vals if v < current_iv)
@@ -69,9 +64,9 @@ def iv_percentile(ticker: str, current_iv: float | None) -> float | None:
 
 
 def iv_history_depth(ticker: str) -> int:
-    """How many IV observations back this symbol's IVR/IVP. Surfaced so the
+    """How many archived observations back this symbol's IVR/IVP. Surfaced so the
     reader knows whether to believe them."""
-    return len(cache.get_iv_history(ticker))
+    return len(archive.iv30_series(ticker))
 
 
 def iv_divergence(ivr: float | None, ivp: float | None) -> float | None:
@@ -80,14 +75,6 @@ def iv_divergence(ivr: float | None, ivp: float | None) -> float | None:
     if ivr is None or ivp is None:
         return None
     return round(abs(ivr - ivp), 1)
-
-
-def update_iv_history(ticker: str, iv: float | None) -> None:
-    """Saves today's ATM IV for future IVR / IVP calculations."""
-    if iv is None:
-        return
-    today = datetime.date.today().isoformat()
-    cache.upsert_iv_history(ticker, today, iv)
 
 
 def atm_iv(contracts: list[dict], spot: float | None) -> float | None:

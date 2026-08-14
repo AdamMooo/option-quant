@@ -17,6 +17,7 @@ from config import DEFAULT_MIN_OI, MAX_SPREAD_PCT, RISK_FREE_RATE
 from analysis import greeks as gk
 from analysis import metrics as mx
 from analysis import volatility as vol
+from data import archive
 from data import fetcher
 from data import demo as demo_data
 from data import macro as macro_data
@@ -25,12 +26,20 @@ from output import display
 
 def process_symbol(ticker: str, refresh: bool) -> tuple[list[dict], dict]:
     """
-    Full pipeline for one symbol: fetch → parse → fill Greeks → enrich.
+    Full pipeline for one symbol: fetch → parse → archive → fill Greeks → enrich.
     Returns (contracts, context).
     """
-    contracts = fetcher.parse_options_chain(ticker, refresh=refresh)
+    raw, contracts = fetcher.fetch_chain_with_raw(ticker, refresh=refresh)
     if not contracts:
         return [], {}
+
+    # Every look at a symbol is a free observation. Archiving is never fatal to
+    # the view — but it must be loud, or a silently broken archive looks identical
+    # to a working one for months.
+    try:
+        archive.write_snapshot(ticker, raw, contracts)
+    except Exception as e:
+        display.print_error(f"archive write failed for {ticker}: {e}")
 
     try:
         price_history = fetcher.fetch_price_history(ticker, refresh=refresh)
@@ -41,8 +50,8 @@ def process_symbol(ticker: str, refresh: bool) -> tuple[list[dict], dict]:
     hv_data = vol.compute_hv(price_history) if price_history else {}
 
     spot = contracts[0].get("spot")
-    atm = mx.atm_iv(contracts, spot)
-    mx.update_iv_history(ticker, atm)
+    # Prefer CBOE's constant-maturity 30d IV; fall back to nearest-ATM front month.
+    atm = raw.get("data", {}).get("iv30") or mx.atm_iv(contracts, spot)
 
     context = {
         "spot": spot,

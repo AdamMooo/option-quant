@@ -225,7 +225,7 @@ def main() -> None:
 
     shown = filtered[: args.limit]
     title = f"{ticker} — {len(shown)} of {len(filtered)} contracts passing filters"
-    display.print_chain(shown, title=title)
+    display.print_chain(shown, title=title, days_to_earnings=ctx["days_to_earnings"])
 
 
 if __name__ == "__main__":

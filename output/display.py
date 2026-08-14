@@ -118,7 +118,7 @@ def print_news(items: list[dict]) -> None:
         console.print(f"  [dim]{a['date']}[/dim]  {headline}  [dim]({a['source']})[/dim]", highlight=False)
 
 
-def print_chain(contracts: list[dict], title: str) -> None:
+def print_chain(contracts: list[dict], title: str, days_to_earnings: int | None = None) -> None:
     table = Table(
         title=title,
         box=box.SIMPLE_HEAD,
@@ -137,12 +137,20 @@ def print_chain(contracts: list[dict], title: str) -> None:
     for name, justify in columns:
         table.add_column(name, justify=justify, no_wrap=True)
 
+    spans_earnings = False
     for c in contracts:
         # Wide markets are dimmed — you cannot trade what you cannot get filled on.
         style = "dim" if (c.get("spread_pct") or 0) > 10 else ""
 
+        # An expiry past the earnings date prices an event the trailing realized-vol
+        # window does not contain. That gap is not a mispricing.
+        expiry_cell = c.get("expiry", "")
+        if days_to_earnings is not None and c.get("dte", 0) >= days_to_earnings:
+            expiry_cell += "*"
+            spans_earnings = True
+
         table.add_row(
-            c.get("expiry", ""),
+            expiry_cell,
             str(c.get("dte", "")),
             _fmt(c.get("strike"), ".1f"),
             c.get("type", ""),
@@ -166,6 +174,14 @@ def print_chain(contracts: list[dict], title: str) -> None:
         "Dimmed rows have a bid-ask spread wider than 10% of mid.[/dim]",
         highlight=False,
     )
+    if spans_earnings:
+        console.print(
+            f"  [yellow]*[/yellow] [dim]expiry spans the earnings date "
+            f"({days_to_earnings}d out). These contracts price an event the trailing "
+            f"realized-vol window does not contain, so their VRP is not comparing "
+            f"like with like.[/dim]",
+            highlight=False,
+        )
 
 
 def print_error(msg: str) -> None:

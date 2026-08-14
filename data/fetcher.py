@@ -1,8 +1,8 @@
 """
 Data fetching layer. Sources:
   - CBOE CDN: delayed options chains
-  - yfinance: daily price history for HV calculation
-  - Finnhub: next earnings date
+  - yfinance: daily price history for realized vol
+  - Finnhub: next earnings date + recent company news
 """
 
 import datetime
@@ -137,25 +137,43 @@ def fetch_next_earnings(cboe_ticker: str) -> int | None:
         return None
 
 
-def fetch_spy_history(days: int = 100) -> list[dict]:
-    """Returns SPY price history for relative strength calculation."""
-    cache_key = "SPY_prices"
-    cached = cache.get_prices(cache_key, CACHE_TTL_PRICES)
-    if cached is not None:
-        return cached
-
-    end = datetime.date.today()
-    start = end - datetime.timedelta(days=days)
-    ticker = yf.Ticker("SPY")
-    hist = ticker.history(start=start.isoformat(), end=end.isoformat(), auto_adjust=True)
-    if hist.empty:
+def fetch_company_news(cboe_ticker: str, days: int = 14, limit: int = 8) -> list[dict]:
+    """
+    Recent company news headlines from Finnhub, newest first.
+    Returns [] if no API key or on any failure — news is context, never load-bearing.
+    """
+    if not _FINNHUB_KEY:
         return []
-    records = [
-        {"date": str(idx.date()), "close": float(row["Close"])}
-        for idx, row in hist.iterrows()
-    ]
-    cache.set_prices(cache_key, records)
-    return records
+
+    cache_key = f"news_{cboe_ticker}"
+    cached = cache.get_generic(cache_key, _FINNHUB_TTL)
+    if cached is not None:
+        return cached[:limit]
+
+    today = datetime.date.today()
+    frm = today - datetime.timedelta(days=days)
+    url = (
+        f"https://finnhub.io/api/v1/company-news"
+        f"?symbol={cboe_ticker}&from={frm}&to={today}&token={_FINNHUB_KEY}"
+    )
+    try:
+        resp = requests.get(url, timeout=8)
+        if resp.status_code != 200:
+            return []
+        items = [
+            {
+                "date": datetime.date.fromtimestamp(a["datetime"]).isoformat(),
+                "headline": a.get("headline", ""),
+                "source": a.get("source", ""),
+            }
+            for a in resp.json()
+            if a.get("datetime") and a.get("headline")
+        ]
+        items.sort(key=lambda a: a["date"], reverse=True)
+        cache.set_generic(cache_key, items)
+        return items[:limit]
+    except Exception:
+        return []
 
 
 def _parse_occ_symbol(occ: str) -> tuple[str, str, float] | None:

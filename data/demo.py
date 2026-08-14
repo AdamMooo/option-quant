@@ -95,7 +95,8 @@ def make_price_history(spot: float, hv30: float = 18.0, days: int = 380, seed: i
     ]
 
 
-# Demo universe: a representative subset of TSX 60 names
+# Symbols with hand-set parameters for offline testing. Not a universe — the tool
+# takes one ticker at a time, and any ticker not listed here falls back to defaults.
 DEMO_SYMBOLS = {
     "RY":   {"spot": 141.20, "hv30": 16.5, "iv_premium": 1.8},
     "TD":   {"spot":  71.80, "hv30": 17.2, "iv_premium": 2.1},

@@ -1,4 +1,8 @@
-"""Historical volatility calculation from daily price history."""
+"""Realized volatility from daily price history.
+
+Direction inference (moving averages, RSI, relative strength, momentum) was removed
+2026-08-14 — the user supplies the thesis. See options-quant.md.
+"""
 
 import math
 
@@ -8,9 +12,13 @@ import pandas as pd
 
 def compute_hv(price_records: list[dict], windows: list[int] = (10, 20, 30, 60)) -> dict[str, float | None]:
     """
-    Returns annualized HV for each window (e.g. HV10, HV20, HV30, HV60).
+    Returns annualized realized vol for each window, as a percentage (e.g. 18.4 = 18.4%).
     price_records: list of {date, close} dicts, chronological.
     Returns None for a window if insufficient data.
+
+    Note: closes come from yfinance with auto_adjust=True, so they are retroactively
+    dividend-adjusted. Fine for a current-state read; NOT point-in-time valid. Do not
+    use this for anything claiming to be observable-at-the-time.
     """
     if len(price_records) < 2:
         return {f"hv{w}": None for w in windows}
@@ -28,72 +36,38 @@ def compute_hv(price_records: list[dict], windows: list[int] = (10, 20, 30, 60))
             result[key] = None
         else:
             std = float(log_returns.iloc[-w:].std(ddof=1))
-            result[key] = round(std * math.sqrt(252) * 100, 2)  # as percentage
+            result[key] = round(std * math.sqrt(252) * 100, 2)
     return result
 
 
-def momentum(price_records: list[dict], days: int) -> float | None:
+def largest_move(price_records: list[dict], window: int = 30) -> dict | None:
     """
-    Price return over the last `days` trading days (as a decimal, e.g. 0.05 = +5%).
+    Biggest single-day log return in the trailing window, and what realized vol
+    would be without it.
+
+    Close-to-close realized vol has a fat-tailed sampling distribution and is badly
+    non-robust to jumps: one earnings gap in a 30-day window can move the annualized
+    number by 8+ vol points. Since that number is about to be compared against a
+    forward-looking implied vol whose window may contain no such event, the reader
+    needs to see it. The literature fix is a jump-robust estimator (bipower
+    variation, Barndorff-Nielsen & Shephard 2004) — not built yet.
     """
-    closes = [r["close"] for r in price_records]
-    if len(closes) < days + 1:
+    if len(price_records) < window + 1:
         return None
-    return (closes[-1] / closes[-(days + 1)]) - 1
-
-
-def compute_technicals(price_records: list[dict], spy_records: list[dict] | None = None) -> dict:
-    """
-    Compute technical indicators from price history.
-    Returns dict with: ma20, ma50, ma200, rsi14, rs20 (vs SPY), hv_trend.
-    All values may be None if insufficient data.
-    """
-    if not price_records:
-        return {}
 
     closes = pd.Series([r["close"] for r in price_records])
-    result: dict = {}
+    dates = [r["date"] for r in price_records]
+    log_returns = np.log(closes / closes.shift(1)).dropna()
+    recent = log_returns.iloc[-window:]
+    if len(recent) < 3:
+        return None
 
-    # Moving average alignment
-    for w, key in [(20, "ma20"), (50, "ma50"), (200, "ma200")]:
-        if len(closes) >= w:
-            result[key] = float(closes.iloc[-w:].mean())
-        else:
-            result[key] = None
+    idx = int(recent.abs().idxmax())
+    biggest = float(recent.loc[idx])
+    ex = recent.drop(index=idx)
 
-    result["price"] = float(closes.iloc[-1])
-
-    # RSI(14)
-    if len(closes) >= 15:
-        delta = closes.diff().dropna()
-        gain = delta.clip(lower=0)
-        loss = (-delta).clip(lower=0)
-        avg_gain = gain.iloc[-14:].mean()
-        avg_loss = loss.iloc[-14:].mean()
-        if avg_loss == 0:
-            result["rsi14"] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            result["rsi14"] = round(float(100 - 100 / (1 + rs)), 1)
-    else:
-        result["rsi14"] = None
-
-    # Relative strength vs SPY over 20 days
-    if spy_records and len(closes) >= 21:
-        spy_closes = pd.Series([r["close"] for r in spy_records])
-        if len(spy_closes) >= 21:
-            stock_ret = closes.iloc[-1] / closes.iloc[-21] - 1
-            spy_ret = spy_closes.iloc[-1] / spy_closes.iloc[-21] - 1
-            result["rs20"] = round(float(stock_ret - spy_ret), 4)
-        else:
-            result["rs20"] = None
-    else:
-        result["rs20"] = None
-
-    # HV trend: HV10 vs HV30 — positive means vol expanding
-    hv = compute_hv(price_records)
-    hv10 = hv.get("hv10")
-    hv30 = hv.get("hv30")
-    result["hv_trend"] = round(hv10 - hv30, 2) if (hv10 and hv30) else None
-
-    return result
+    return {
+        "date": dates[idx],
+        "move_pct": round(biggest * 100, 2),
+        "hv_ex_jump": round(float(ex.std(ddof=1)) * math.sqrt(252) * 100, 2),
+    }

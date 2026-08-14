@@ -1,5 +1,12 @@
 """
-Per-contract and per-symbol metrics: VRP, IVR, IVP, momentum, etc.
+Descriptive per-contract and per-symbol metrics: VRP, IVR, IVP, ATM IV.
+
+These describe where the option market currently sits. None of them is a
+recommendation — the `trade_setup` classifier that emitted "sell_vol"/"buy_vol"
+labels from hand-set thresholds was removed 2026-08-14.
+
+IVR and IVP are only as good as the local IV history, which today is thin.
+Below 10 stored observations they return None rather than guessing.
 """
 
 import datetime
@@ -8,7 +15,10 @@ from data import cache
 
 
 def vrp(iv_pct: float | None, hv30: float | None) -> float | None:
-    """Volatility Risk Premium: IV - HV30 (both as %).  Positive = options expensive."""
+    """
+    Volatility Risk Premium in vol points: IV - HV30 (both as %).
+    Signed on purpose. Positive = options rich vs recent realized.
+    """
     if iv_pct is None or hv30 is None:
         return None
     return round(iv_pct - hv30, 2)
@@ -16,8 +26,8 @@ def vrp(iv_pct: float | None, hv30: float | None) -> float | None:
 
 def iv_rank(ticker: str, current_iv: float | None) -> float | None:
     """
-    IV Rank (0–100): position of current IV within its 52-week range.
-    Uses iv_history table in SQLite.
+    IV Rank (0-100): position of current IV within its trailing 52-week range.
+    Needs >= 10 stored observations; returns None otherwise.
     """
     if current_iv is None:
         return None
@@ -39,7 +49,8 @@ def iv_rank(ticker: str, current_iv: float | None) -> float | None:
 
 def iv_percentile(ticker: str, current_iv: float | None) -> float | None:
     """
-    IV Percentile (0–100): % of past 252 trading days where IV was below current IV.
+    IV Percentile (0-100): share of stored trailing-year observations below current IV.
+    Needs >= 10 stored observations; returns None otherwise.
     """
     if current_iv is None:
         return None
@@ -57,31 +68,22 @@ def iv_percentile(ticker: str, current_iv: float | None) -> float | None:
     return round(below / len(vals) * 100, 1)
 
 
+def iv_history_depth(ticker: str) -> int:
+    """How many IV observations back this symbol's IVR/IVP. Surfaced so the
+    reader knows whether to believe them."""
+    return len(cache.get_iv_history(ticker))
+
+
 def iv_divergence(ivr: float | None, ivp: float | None) -> float | None:
-    """Absolute difference between IV Rank and IV Percentile."""
+    """Gap between IV Rank and IV Percentile. Large gap means the range is being
+    set by a few outlier days rather than the bulk of the distribution."""
     if ivr is None or ivp is None:
         return None
     return round(abs(ivr - ivp), 1)
 
 
-def trade_setup(ivr: float | None, ivp: float | None, vrp_val: float | None) -> str | None:
-    """Classify the candidate into a simple trade setup signal."""
-    if ivr is None or ivp is None or vrp_val is None:
-        return None
-
-    if ivr >= 70 and ivp >= 70 and vrp_val >= 0:
-        return "sell_vol"
-    if ivr <= 30 and ivp <= 30 and vrp_val <= 0:
-        return "buy_vol"
-    if ivr >= 70 and ivp < 55 and vrp_val >= 0:
-        return "rank_only"
-    if ivp >= 70 and ivr < 55 and vrp_val >= 0:
-        return "percentile_only"
-    return "neutral"
-
-
 def update_iv_history(ticker: str, iv: float | None) -> None:
-    """Saves today's IV to history for future IVR / IVP calculations."""
+    """Saves today's ATM IV for future IVR / IVP calculations."""
     if iv is None:
         return
     today = datetime.date.today().isoformat()
@@ -90,8 +92,8 @@ def update_iv_history(ticker: str, iv: float | None) -> None:
 
 def atm_iv(contracts: list[dict], spot: float | None) -> float | None:
     """
-    Finds the nearest-ATM call with a valid IV and returns it.
-    Used as the representative "current IV" for a symbol.
+    Nearest-ATM front-month call IV, used as the representative "current IV"
+    for the symbol.
     """
     if not spot:
         return None
@@ -103,7 +105,6 @@ def atm_iv(contracts: list[dict], spot: float | None) -> float | None:
     if not calls_with_iv:
         return None
 
-    # Pick front-month dte range (7–60 days), closest to ATM
     candidates = [c for c in calls_with_iv if 7 <= c.get("dte", 0) <= 60]
     if not candidates:
         candidates = calls_with_iv
@@ -115,8 +116,6 @@ def atm_iv(contracts: list[dict], spot: float | None) -> float | None:
 def enrich_contract(
     contract: dict,
     hv_data: dict,
-    mom20: float | None,
-    mom60: float | None,
     ivr_val: float | None,
     ivp_val: float | None,
 ) -> dict:
@@ -130,7 +129,4 @@ def enrich_contract(
     contract["ivr"] = ivr_val
     contract["ivp"] = ivp_val
     contract["iv_divergence"] = iv_divergence(ivr_val, ivp_val)
-    contract["setup_type"] = trade_setup(ivr_val, ivp_val, contract.get("vrp"))
-    contract["mom20"] = round(mom20 * 100, 2) if mom20 is not None else None
-    contract["mom60"] = round(mom60 * 100, 2) if mom60 is not None else None
     return contract

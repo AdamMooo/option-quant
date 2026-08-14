@@ -151,8 +151,34 @@ invented fresh.
 
 ## Status
 
-Definition agreed 2026-08-14. No code has been changed yet — the clone is at upstream `26a655a`.
-Next action is the deletion pass, then the archive.
+Definition agreed and deletion pass done 2026-08-14 (`731a570`, on `main`, not pushed). 879 lines
+removed, 619 added. Tests pass offline (6); live CBOE path verified against AAPL.
+
+`main.py TICKER` now prints: macro header, spot, realized vol at 10/20/30/60d, ATM IV and its gap
+to 30d realized, a jump caution when one day dominates the realized window, IV history depth,
+earnings proximity, recent news, and the filtered chain with Greeks and liquidity.
+
+**Next: the append-only chain archive.** Nothing else should be built first.
+
+### Found during the deletion pass
+
+AAPL on 2026-08-14 printed ATM IV 20.6% against 30d realized 34.9% — a −14.3 vol point gap that
+reads as "options cheap" and is almost certainly not. One −7.6% day (2026-07-31, the earnings
+reaction) contributes 8.4 of those 34.9 vol points; ex-that-day realized is 26.4%. And the 20.6%
+implied prices a forward window containing *no* earnings, because AAPL has already reported.
+
+Two distinct problems, both now flagged in the output rather than fixed:
+
+1. **Close-to-close realized vol is not robust to jumps.** The estimator has a fat-tailed sampling
+   distribution and a single gap moves the annualized number by 8+ points. The literature fix is a
+   jump-robust estimator — **bipower variation** (Barndorff-Nielsen & Shephard 2004), which
+   separates the continuous diffusion component from jumps. Not built.
+2. **VRP needs a matched window.** Comparing trailing realized to forward implied is only
+   meaningful if both windows contain the same events.
+   [[equity-cover-call-strategy-single-stock]] calls this matched-window RV and already
+   implements it in `src/outcomes.py`.
+
+Until both are addressed, the IV-minus-RV number on this screen is description, not evidence.
 
 ## Known issues carried in from upstream
 

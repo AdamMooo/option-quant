@@ -362,11 +362,38 @@ Until both are addressed, the IV-minus-RV number on this screen is description, 
 
 ## Known issues carried in from upstream
 
-- `.env.example` was removed upstream (`e7b3a51`); Finnhub is now load-bearing for earnings and
-  news, so it needs restoring.
+- ~~`.env.example` was removed upstream (`e7b3a51`)~~ — restored and tracked, 2026-08-14.
 - Sequential fetch across symbols with no concurrency — irrelevant once the tool is single-symbol.
+  Capture across the 103-name universe throttles and retries instead (`archive.py`).
 - `config.py` module docstring describes the TSX map as the repo's purpose.
-- Repo name is singular (`option-quant`) while the folder is plural (`options-quant`).
-- Not registered in the [[CLAUDE]] repo table at vault root.
+- Repo name is singular (`option-quant`) while the folder is plural (`options-quant`). Recorded in
+  the vault [[CLAUDE]] table rather than fixed — renaming the remote breaks the clone URL for no
+  gain.
+- ~~Not registered in the [[CLAUDE]] repo table at vault root.~~ — registered 2026-08-14, in both
+  [[CLAUDE]] and [[INDEX]], as sharing the `systematic-investing-research/` container **without**
+  being governed by the charter.
 - The parent `systematic-investing-research/` still documents `regime-detection`, which no longer
-  exists on disk. The previous milestone's regime-overlay design depended on it.
+  exists on disk. The previous milestone's regime-overlay design depended on it. **Still open, and
+  wider than this repo:** the container now holds `core-risk-overlay` (active,
+  `github.com/AdamMooo/core-risk-overlay`) where `regime-detection` used to be, and the vault docs
+  have not caught up. The four governance docs were stored inside `regime-detection` for
+  durability, so on disk they are gone.
+
+## Memory
+
+Personal quant project on the AdamMooo GitHub account, pulled in from `option-quant` on
+2026-08-14 and re-scoped on arrival. It **describes one option market at a time and does not
+rank**: no scanner, no top-N, no composite score — that design was deleted for cause the day the
+repo landed, and the prohibition is written against the *mechanism* (combining unlike units), not
+the label. Surfacing "opportunities" is Layer 2, a research question gated on archive depth, not a
+feature to hand-tune. Shares the `systematic-investing-research/` container with the governed
+stack but is not part of it.
+
+## Related
+
+- [[INDEX|Vault home]]
+- [[systematic-investing-research/portfolio-manager/portfolio-manager]] — potential downstream
+  consumer. Boundary in the Interfaces section above: descriptive observations only, PM owns any
+  interpretation, and this repo must never import PM. **No feed is wired and none is being built.**
+- [[equity-cover-call-strategy-single-stock]] — matched-window realized vol, already implemented
+  there in `src/outcomes.py`

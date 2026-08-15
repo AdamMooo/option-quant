@@ -133,6 +133,39 @@ def test_second_capture_same_day_appends_rather_than_clobbers(temp_archive):
     assert series[0][1] == 31.0
 
 
+def test_session_date_converts_utc_to_the_exchange_day():
+    # CBOE stamps UTC. Taking the first 10 characters files an evening capture
+    # under a session that has not happened yet.
+    assert archive.session_date("2026-08-15T01:50:43", "") == "2026-08-14"  # EDT, UTC-4
+    assert archive.session_date("2026-01-15T02:50:43", "") == "2026-01-14"  # EST, UTC-5
+    assert archive.session_date("2026-08-14T17:57:29", "") == "2026-08-14"  # midday, no roll
+
+
+def test_evening_capture_lands_in_the_session_that_just_closed(temp_archive):
+    """
+    Two captures of the *same* session, one midday and one after 20:00 ET. The
+    late one carries the next calendar date in UTC. If that is taken literally it
+    invents a trading day and lets one session contribute two observations to the
+    distribution IVR and IVP are ranked against.
+    """
+    contracts = demo.make_chain("TEST", spot=100.0)
+    midday = _fake_raw(iv30=25.0)
+    midday["timestamp"] = "2026-08-14T17:57:29"    # 13:57 ET
+    evening = _fake_raw(iv30=31.0)
+    evening["timestamp"] = "2026-08-15T01:50:43"   # 21:50 ET — same session
+
+    temp_archive.write_snapshot("TEST", midday, contracts)
+    temp_archive.write_snapshot("TEST", evening, contracts)
+
+    rows = temp_archive.summary("TEST")
+    assert rows[0]["snapshots"] == 2
+    assert rows[0]["trading_days"] == 1
+    assert rows[0]["last_date"] == "2026-08-14"
+
+    series = temp_archive.iv30_series("TEST", days=36500)
+    assert series == [("2026-08-14", 31.0)]
+
+
 def test_iv_rank_returns_none_below_threshold(temp_archive):
     contracts = demo.make_chain("TEST", spot=100.0)
     temp_archive.write_snapshot("TEST", _fake_raw(), contracts)

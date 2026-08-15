@@ -72,6 +72,8 @@ Adopted from the sibling repos, because the inherited code violated it structura
 | No as-of stamp distinguishable from run date | **CLOSED** 2026-08-14. `source_ts` (exchange) and `captured_at` (fetch) stored separately. |
 | `yfinance auto_adjust=True` returns retroactively dividend-adjusted closes; realized vol from them is not what was observable | **LATENT.** Fixed *going forward* — unadjusted OHLCV is now captured per snapshot. But `analysis/volatility.py` still reads yfinance for history predating the archive, and will until the archive is deep enough to replace it. Anything computed from that path today is not point-in-time valid. |
 | Realized vol compared against implied over a *different* window | **OPEN.** See the AAPL finding below. |
+| `quote_date` took `source_ts[:10]` on a **UTC** stamp, so any capture after 20:00 ET was filed under the *next* trading session — inventing a session, and letting one session contribute two observations to the distribution IVR/IVP rank against | **CLOSED** 2026-08-14. `session_date()` converts to `America/New_York`, and both `iv30_series` and `summary` now derive the session date **on read**, so rows already written under the old rule are re-attributed without rewriting history. Two regression tests, one covering EST and EDT. |
+| A capture taken **before the 09:30 ET open** carries the previous session's quotes but stamps the current date | **OPEN, narrow.** The 16:45 scheduled job is well clear of it; ad-hoc morning runs are not. Fixing it needs a session-open rule, not just a timezone. |
 
 A fuller leak register in `docs/POINT-IN-TIME-DISCIPLINE.md`, in the format used by
 [[equity-cover-call-strategy-single-stock]], follows once there are enough entries to warrant it.
@@ -149,6 +151,99 @@ invented fresh.
 - **IV rank / IV percentile** are retail-practitioner constructs, not literature terms. Useful as
   description; no published evidence base as a signal.
 
+## Interfaces
+
+Agreed 2026-08-14. This section is the boundary contract; it constrains what may be built, not
+just what is built today.
+
+### The boundary
+
+```
+Options Quant  →  descriptive market observations
+                  (later)  →  Portfolio Manager  →  broader portfolio context
+```
+
+[[portfolio-manager]] is a **potential downstream consumer** of this repo's observations. It is not
+a dependency in either direction and must not become one.
+
+Prohibited from crossing into this repo, in any form:
+
+- Imports of `portfolio-manager` (or any sibling repo's) modules.
+- Allocation logic, position sizing, band or sleeve limits.
+- Execution, order construction, or broker connectivity.
+- Any decision rule that consumes portfolio state to decide what this repo reports.
+
+This repo must remain independently runnable and independently testable with the sibling repos
+absent from disk. That property is load-bearing, not incidental.
+
+### Cross-sectional ranking is not in the mandate
+
+`Detect → Quantify → Describe`, not `Detect → Quantify → Rank`.
+
+Not to be reintroduced under any name: `cmd_scan`, `UNIVERSE`, `--top`, `analysis/scorer.py`,
+composite anomaly scores, cross-sectional ranking, or an equivalent mechanism relabelled. Calling
+a composite an "anomaly magnitude" does not fix it — the defect is combining heterogeneous
+families into one scalar, and that defect is independent of the label. See the post-mortem above
+for the six numbered reasons.
+
+**The ranking question is open, not settled against.** It is a Layer 2 research question, gated on
+preregistration and measurement in the style of [[equity-cover-call-strategy-single-stock]]. What
+is prohibited is reintroducing it *silently*, as a byproduct of some other feature. Reopening it
+means editing this section first.
+
+Three things that are ordering but are **not** the prohibited rank, so they are not confused later:
+
+| Mechanism | Status | Why it differs |
+|---|---|---|
+| `--sort iv\|vrp\|gamma\|oi\|spread` | Allowed, exists | Orders contracts *within one chain*. A visibility filter on one name's own strikes. |
+| Within-name historical flagging | Allowed in principle, gated on depth | "This name's front IV sits high in *its own* trailing distribution." One name against itself. |
+| Ordering names against each other | Prohibited | Requires a universe and a comparable scalar across names. This is the deleted object. |
+
+### Surfacing, diligence prompts, and what "unusual" requires
+
+This repo is meant to help a human understand a name's option market and notice what is worth
+investigating. That is not in tension with the above, provided the distinction holds:
+
+- A **pointer to attention** — "front-month IV is at the top of this name's own 6-month range,
+  skew is steeper than its own median, earnings fall inside this expiry; go look" — is
+  description with a stated threshold. Legitimate.
+- A **recommendation** — "buy this", or a scalar that orders candidates — is not.
+
+The rules that keep the first from decaying into the second: every flag carries its own units and
+the provenance of its threshold; flags are never summed, averaged, or counted into a score; the
+count of triggered flags is not itself a measure of anything.
+
+Available **today**, with no archive history, because they are self-contained facts about the
+current chain: term-structure shape and where the earnings kink sits, skew by delta, VRP sign and
+magnitude in vol points, liquidity by strike, event calendar, Greeks at a chosen contract.
+
+Requires history, therefore **gated**: the word *unusual*. Every form of "is this high" is a
+question about where today sits in this name's own distribution, and that distribution does not
+exist yet.
+
+### Structured snapshot/export — future, gated
+
+A structured export is conceptually compatible with the mandate: one ticker, one timestamp, the
+Layer 1 observations that actually exist, as descriptive fields with explicit units and
+provenance. No composite score, no cross-sectional rank, no implied recommendation.
+
+It is **not** the next implementation priority, and it is not to be built ahead of the archive:
+
+```
+Reliable daily capture → historical archive → distribution → normalization → structured interface
+```
+
+Any field requiring historical normalization is gated on archive depth. `iv_percentile` and
+`iv_rank` are therefore **future derived-on-read measurements, not currently valid fields**. They
+must never be defaulted — the silent `None → 50` substitution is precisely the failure the archive
+was built to prevent. The guard is live at `analysis/metrics.py:26` (`MIN_IV_OBSERVATIONS = 10`,
+returning `None` below that), and `iv_history_depth` is surfaced in the output so the reader knows
+whether to believe them.
+
+Missing capture days are unrecoverable. Coverage outranks any downstream schema.
+
+> **Capture first. Describe honestly. Normalize when history exists. Do not rank by accident.**
+
 ## Status
 
 Definition agreed and deletion pass done 2026-08-14 (`731a570`, on `main`, not pushed). 879 lines
@@ -174,13 +269,76 @@ CBOE turned out to supply three things the old code ignored:
 The old `iv_history` table is gone. It used `INSERT OR REPLACE` keyed on run date, so a second run
 in a day silently overwrote the first. There is now a regression test for exactly that.
 
-Storage: ~149 bytes per contract row, ~3,300 contracts per symbol per snapshot. Daily capture of 20
-symbols is roughly **2.5 GB/year**. Acceptable for now; if it needs trimming the knob is skipping
-zero-OI contracts at capture, which is a decision that cannot be undone, so it is not the default.
+Storage, **measured 2026-08-14** after the universe expansion (103 tickers, 305,468 rows):
+**143 bytes per contract row**. One full nightly round is 231,074 contracts ≈ **33 MB/night**, so
+the seed universe costs **~8.3 GB/year** against 699 GB free. Chain depth is wildly uneven — SPY
+14,588 and QQQ 12,738 contracts against AEP 478 — so the four index ETFs carry a disproportionate
+share of the total.
 
-**Next: neither analytics nor Layer 2 — coverage.** The archive is worth exactly as much as the
-number of days in it, and a day not captured is unrecoverable. Everything else is downstream of
-getting a scheduled daily capture running.
+**The zero-OI trim was considered and rejected.** Zero-OI contracts are only **18.9%** of stored
+rows — trimming them saves about a fifth of the total while permanently destroying the record of
+where open interest *first appears*, which is precisely the observation you would want for studying
+new positioning. Small, irreversible, and pointed at the wrong thing. Not the default and not
+recommended.
+
+### Scheduled capture
+
+**Running since 2026-08-14.** `scripts/capture_daily.ps1`, registered as the Windows task
+`options-quant-daily-capture`, daily at 16:45 local — after the close, so the delayed feed carries
+the closing chain. Verified through the Task Scheduler path itself, not just a manual run
+(`LastTaskResult: 0`).
+
+- **No watchlist file.** The script captures `--from-archive`, so the tracked set is whatever is
+  already in the archive. `main.py TICKER` snapshots any name you look at, and the schedule picks it
+  up the next day. A list that has to be kept in sync is a list that goes stale.
+- **The universe is 103 names** (104 attempted; ANSS no longer trades) — Nasdaq-100 plus
+  SPY/QQQ/IWM/DIA — enrolled 2026-08-14 from
+  `data/seed.py` via `archive.py capture --seed`. That file is a **seed, not a membership list**: it
+  is read once to enrol and never consulted again, so index rebalancing cannot silently rot it. A
+  name that leaves the index keeps being captured, which is more history, not a bug.
+  **Capture breadth is not a scan** — nothing ranks these against each other. See Interfaces.
+- **Hardened for scale**, because at ~100 names per-night failures go from unlikely to certain:
+  3 attempts with 2s/5s backoff (a transient failure is a permanently lost day — there is no
+  backfill), 0.4s throttle between symbols (being rate-limited costs *every* name that night, not
+  one), and a nonzero exit only when **>10%** of the run fails. That last split is deliberate: the
+  exit code catches systemic breakage, while `archive.py status` catches the single ticker that
+  quietly died. A job that reports failure because one name delisted is a job you learn to ignore.
+- **`status` flags staleness against the archive, not the wall clock.** On a holiday every ticker is
+  a day behind and nothing is wrong; a ticker that has stopped updating falls behind *its peers*.
+
+**CBOE serves stale quotes for some names, and it caught it on the first night.** ODFL, PAYX, PCAR
+and VRTX were fetched at 02:28 UTC on 2026-08-15 but came back stamped `source_ts` **2026-08-13** —
+up to two days old — while the other 99 names were current. Nothing is wrong with the fetch; the
+vendor is serving a stale cache for those symbols.
+
+This is the entire reason `captured_at` and `source_ts` are stored as separate facts. Because the
+session date derives from `source_ts`, those four are correctly filed under the session they
+actually came from rather than the night we fetched them. The cost is real but honest: those names
+will have **holes** in their coverage, visible as a lower `trading_days` in `status`, rather than
+four silently wrong observations. A capture-time warning when `source_ts` lags `captured_at` by more
+than a session would make it visible sooner; `status` already makes it visible eventually.
+- **`-StartWhenAvailable` is set**, so a machine that was asleep at 16:45 still captures when it
+  wakes. A missed day cannot be backfilled, so the default of silently skipping was not acceptable.
+- **Weekends are skipped by rule; holidays are not.** Skipping holidays needs a hardcoded calendar,
+  and a stale table fails silently — the failure mode [[portfolio-manager]] hit with `_SYMBOL_REMAP`
+  the same day. A holiday run appends a snapshot carrying the prior session's `quote_date`, which
+  `iv30_series` already dedupes. The cost is disk, not correctness.
+- Log: `logs/capture-YYYY-MM.log` (gitignored).
+
+```powershell
+Get-ScheduledTaskInfo -TaskName 'options-quant-daily-capture'   # did it run, what did it return
+Unregister-ScheduledTask -TaskName 'options-quant-daily-capture' -Confirm:$false   # remove
+```
+
+**Next: still coverage, then the two unbuilt Layer 1 rows.** The archive is worth exactly as much as
+the number of days in it. `iv_rank`/`iv_percentile` stay `None` until 10 trading days (~2026-08-28);
+a range that means what its name implies needs a year.
+
+The two Layer 1 components in the table above that are **promised and not implemented** are ATM IV
+term structure and skew by delta — `output/display.py` has only the macro header, symbol header,
+news and chain table. Both are self-contained facts about a single day's chain, so neither is gated
+on archive depth, and both say more about what the market is pricing than the flat contract table
+does. They are the honest next build after capture is safely running.
 
 ### Found during the deletion pass
 

@@ -28,8 +28,17 @@ at the boundary is not interpretation, but it is a conversion — hence this not
 import datetime
 import sqlite3
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DB_PATH = Path(__file__).parent.parent / "archive" / "chains.db"
+
+# CBOE stamps `timestamp` in UTC. The trading session it belongs to is an
+# Eastern-time fact: a capture at 21:50 ET is 01:50 UTC the *following* calendar
+# day, and taking source_ts[:10] files it under a session that has not happened
+# yet. That inflates the trading-day count, and because iv30_series takes one
+# observation per session date, it lets a single session contribute two points to
+# the distribution that IVR and IVP are computed against.
+_EXCHANGE_TZ = ZoneInfo("America/New_York")
 
 _APPEND_ONLY_TABLES = ("snapshots", "underlying", "contracts")
 
@@ -110,10 +119,28 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
-def _quote_date(source_ts: str | None, captured_at: str) -> str:
-    """The trading date these quotes belong to. Prefer the exchange's own stamp."""
+def session_date(source_ts: str | None, captured_at: str) -> str:
+    """
+    The trading session these quotes belong to, as an Eastern-time date.
+
+    Prefers the exchange's own stamp over our fetch time. Both are UTC, so both
+    are converted before the date is taken — see _EXCHANGE_TZ above for why the
+    naive `[:10]` was wrong.
+
+    Note a remaining subtlety this does *not* solve: a capture taken before the
+    09:30 ET open carries the previous session's quotes but stamps the current
+    date. Pre-open captures are therefore mis-attributed by one session. The
+    16:45 scheduled job is well clear of it; ad-hoc morning runs are not.
+    """
     stamp = source_ts or captured_at
-    return stamp[:10]
+    try:
+        parsed = datetime.datetime.fromisoformat(stamp)
+    except ValueError:
+        return stamp[:10]
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(_EXCHANGE_TZ).date().isoformat()
 
 
 def write_snapshot(ticker: str, raw: dict, contracts: list[dict]) -> int | None:
@@ -137,7 +164,7 @@ def write_snapshot(ticker: str, raw: dict, contracts: list[dict]) -> int | None:
                 ticker,
                 captured_at,
                 source_ts,
-                _quote_date(source_ts, captured_at),
+                session_date(source_ts, captured_at),
                 data.get("current_price"),
                 data.get("iv30"),
                 len(contracts),
@@ -193,40 +220,67 @@ def iv30_series(ticker: str, days: int = 365) -> list[tuple[str, float]]:
     with _conn() as conn:
         rows = conn.execute(
             """
-            SELECT quote_date, iv30 FROM snapshots s
+            SELECT snapshot_id, source_ts, captured_at, iv30 FROM snapshots
             WHERE ticker = ? AND quote_date >= ? AND iv30 IS NOT NULL
-              AND snapshot_id = (
-                  SELECT MAX(snapshot_id) FROM snapshots
-                  WHERE ticker = s.ticker AND quote_date = s.quote_date AND iv30 IS NOT NULL
-              )
-            ORDER BY quote_date
+            ORDER BY snapshot_id
             """,
             (ticker, cutoff),
         ).fetchall()
-    return rows
+
+    # Session date is recomputed here rather than read from the stored quote_date
+    # column. The archive stores observations and derives everything else on read
+    # precisely so a definition can be corrected without rewriting history — and
+    # this definition was corrected (see session_date). Rows written under the old
+    # UTC-naive rule are re-attributed to the right session by this path.
+    #
+    # Later snapshot_id wins within a session, so the last capture of the day is
+    # the one that counts. Dedupe is by snapshot_id, not captured_at: two captures
+    # inside the same second share a timestamp.
+    latest: dict[str, tuple[int, float]] = {}
+    for snapshot_id, source_ts, captured_at, iv30 in rows:
+        day = session_date(source_ts, captured_at)
+        if day not in latest or snapshot_id > latest[day][0]:
+            latest[day] = (snapshot_id, iv30)
+    return [(day, iv) for day, (_, iv) in sorted(latest.items())]
 
 
 def summary(ticker: str | None = None) -> list[dict]:
-    """Per-ticker archive coverage."""
+    """
+    Per-ticker archive coverage.
+
+    Grouped in Python rather than SQL because trading_days must count *sessions*,
+    and the session date is derived on read (see iv30_series). Counting DISTINCT
+    quote_date in SQL would report the stored — and for evening captures, wrong —
+    dates, overstating how much history a ticker actually has and unlocking
+    IVR/IVP early off duplicate observations of one session.
+    """
     with _conn() as conn:
-        sql = """
-            SELECT ticker,
-                   COUNT(*)                        AS snapshots,
-                   COUNT(DISTINCT quote_date)      AS trading_days,
-                   MIN(quote_date)                 AS first_date,
-                   MAX(quote_date)                 AS last_date,
-                   SUM(contract_count)             AS contract_rows
-            FROM snapshots
-        """
+        sql = "SELECT ticker, source_ts, captured_at, contract_count FROM snapshots"
         params = ()
         if ticker:
             sql += " WHERE ticker = ?"
             params = (ticker,)
-        sql += " GROUP BY ticker ORDER BY ticker"
         rows = conn.execute(sql, params).fetchall()
 
-    keys = ("ticker", "snapshots", "trading_days", "first_date", "last_date", "contract_rows")
-    return [dict(zip(keys, r)) for r in rows]
+    acc: dict[str, dict] = {}
+    for tkr, source_ts, captured_at, count in rows:
+        day = session_date(source_ts, captured_at)
+        a = acc.setdefault(tkr, {"snapshots": 0, "days": set(), "contract_rows": 0})
+        a["snapshots"] += 1
+        a["days"].add(day)
+        a["contract_rows"] += count or 0
+
+    return [
+        {
+            "ticker": tkr,
+            "snapshots": a["snapshots"],
+            "trading_days": len(a["days"]),
+            "first_date": min(a["days"]),
+            "last_date": max(a["days"]),
+            "contract_rows": a["contract_rows"],
+        }
+        for tkr, a in sorted(acc.items())
+    ]
 
 
 def db_size_bytes() -> int:

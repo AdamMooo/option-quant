@@ -8,3 +8,9 @@ python-dotenv>=1.0
 pytest>=8.0
 
 # The archive uses stdlib sqlite3 — no dependency needed.
+
+# Windows has no IANA tz database, so stdlib zoneinfo needs this. The archive
+# converts CBOE's UTC quote stamp to the US/Eastern trading session date; getting
+# that wrong files an evening capture under the next session. Present transitively
+# via pandas, declared here because correctness depends on it.
+tzdata>=2024.1

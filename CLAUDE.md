@@ -47,11 +47,14 @@ python main.py SHOP --demo                 # synthetic data, no network
 
 python archive.py capture AAPL MSFT NVDA   # append snapshots on demand
 python archive.py capture --from-archive   # re-capture everything already tracked
-python archive.py status                   # coverage, readiness, disk size
+python archive.py capture --seed           # enrol the seed universe (data/seed.py), one-off
+python archive.py status                   # coverage, readiness, staleness, disk size
 ```
 
 Capture on a schedule — the archive only becomes useful with daily coverage, and a day not
-captured is gone for good.
+captured is gone for good. **This is running:** `scripts/capture_daily.ps1` via the Windows task
+`options-quant-daily-capture`, daily 16:45, logging to `logs/`. Details in `options-quant.md`
+under "Scheduled capture".
 
 ## The archive is append-only
 

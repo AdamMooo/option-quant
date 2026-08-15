@@ -334,11 +334,46 @@ Unregister-ScheduledTask -TaskName 'options-quant-daily-capture' -Confirm:$false
 the number of days in it. `iv_rank`/`iv_percentile` stay `None` until 10 trading days (~2026-08-28);
 a range that means what its name implies needs a year.
 
-The two Layer 1 components in the table above that are **promised and not implemented** are ATM IV
-term structure and skew by delta — `output/display.py` has only the macro header, symbol header,
-news and chain table. Both are self-contained facts about a single day's chain, so neither is gated
-on archive depth, and both say more about what the market is pricing than the flat contract table
-does. They are the honest next build after capture is safely running.
+### Volatility surface — built 2026-08-14
+
+`analysis/surface.py`. The two Layer 1 rows that were promised and unimplemented — ATM IV term
+structure and skew by delta — now print from `main.py TICKER`. Neither is gated on archive depth;
+both are self-contained facts about a single day's chain.
+
+Per expiry: ATM IV, the 25-delta wings, and the two standard summaries of smile shape.
+
+| Quantity | Definition | Reading |
+|---|---|---|
+| ATM IV | IV interpolated to strike = spot | The level |
+| 25Δ risk reversal | σ(25Δ put) − σ(25Δ call) | Positive = market pays more for downside |
+| 25Δ butterfly | mean(25Δ wings) − σ(ATM) | Positive = tails priced fatter than lognormal |
+| Term slope | ATM IV at 90d − at 30d | Positive = contango; negative = front bid, an event |
+
+Three implementation choices that carry the meaning:
+
+- **Interpolated, never snapped to the nearest strike.** With strikes on a 2.50 grid, "nearest"
+  makes the ATM series step as spot drifts across the grid — vol appearing to move when only the
+  tape moved. Same argument for interpolating the term slope in DTE, so it does not jump when an
+  expiry rolls off.
+- **Skew is measured in delta, not strike distance.** A fixed strike offset means different things
+  at different tenors and vol levels; a 25-delta option is about the same distance out in standard
+  deviations regardless. `TARGET_DELTA = 0.25` is the market convention — far enough out to carry
+  wing information, near enough in to stay liquid.
+- **A missing wing is reported as missing.** If the chain does not bracket 0.25 delta the field is
+  `None`; nothing is extrapolated. Contracts with no bid are excluded — their "mid" is half the ask,
+  which produces an IV that is an artifact of the quote convention. Expiring-today contracts are
+  excluded for the same class of reason: no time value left to invert.
+
+AAPL 2026-08-14 read: 3d 14.3% → 30d 22.3% → 90d 25.0% → 854d 28.8%, steep contango; risk reversal
+climbing monotonically from ~0.0 at the front to +2.6 at the back, so downside protection gets
+progressively more expensive with tenor while the front is nearly symmetric. Butterfly stays small
+(+0.1 to +0.6) and turns slightly negative past a year.
+
+**Still open, and unchanged by this:** the archive is worth exactly as much as the number of days in
+it. `iv_rank`/`iv_percentile` stay `None` until 10 trading days (~2026-08-28); a range that means
+what its name implies needs a year. The surface describes today's shape — it cannot say whether that
+shape is unusual for this name, which remains a question about a distribution that does not exist
+yet.
 
 ### Found during the deletion pass
 

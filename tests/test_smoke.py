@@ -7,6 +7,7 @@ import pytest
 import main
 from analysis import greeks as gk
 from analysis import metrics as mx
+from analysis import surface
 from analysis import volatility as vol
 from data import archive, demo
 
@@ -131,6 +132,83 @@ def test_second_capture_same_day_appends_rather_than_clobbers(temp_archive):
     series = temp_archive.iv30_series("TEST", days=36500)
     assert len(series) == 1
     assert series[0][1] == 31.0
+
+
+def _surface_contract(strike, opt_type, iv, delta, dte=30, expiry="2026-09-13"):
+    return {
+        "expiry": expiry, "dte": dte, "strike": strike, "type": opt_type,
+        "iv": iv, "delta": delta, "bid": 1.0, "ask": 1.1,
+    }
+
+
+def test_atm_iv_interpolates_between_strikes_rather_than_snapping():
+    """
+    Spot sits between listed strikes. Taking the nearest strike makes the ATM
+    series step as spot drifts across the grid — vol appearing to move when only
+    the tape moved.
+    """
+    contracts = [
+        _surface_contract(100.0, "C", 20.0, 0.55),
+        _surface_contract(110.0, "C", 30.0, 0.25),
+        _surface_contract(100.0, "P", 20.0, -0.45),
+        _surface_contract(110.0, "P", 30.0, -0.75),
+    ]
+    rows = surface.surface_by_expiry(contracts, spot=105.0)
+    # Halfway between the strikes, so halfway between the vols.
+    assert rows[0]["atm_iv"] == pytest.approx(25.0)
+
+
+def test_risk_reversal_is_positive_when_puts_are_bid_over_calls():
+    contracts = [
+        _surface_contract(100.0, "C", 20.0, 0.50),
+        _surface_contract(120.0, "C", 22.0, 0.25),   # 25d call at 22
+        _surface_contract(100.0, "P", 20.0, -0.50),
+        _surface_contract(80.0, "P", 28.0, -0.25),   # 25d put at 28
+    ]
+    rows = surface.surface_by_expiry(contracts, spot=100.0)
+    r = rows[0]
+    assert r["put25_iv"] == pytest.approx(28.0)
+    assert r["call25_iv"] == pytest.approx(22.0)
+    assert r["risk_reversal"] == pytest.approx(6.0)      # puts richer by 6 vol pts
+    assert r["butterfly"] == pytest.approx(5.0)          # mean(28,22) - 20
+
+
+def test_surface_reports_missing_wing_rather_than_extrapolating():
+    """A chain that stops at 0.40 delta cannot say what 0.25 delta costs."""
+    contracts = [
+        _surface_contract(100.0, "C", 20.0, 0.55),
+        _surface_contract(105.0, "C", 21.0, 0.40),
+        _surface_contract(100.0, "P", 20.0, -0.45),
+        _surface_contract(95.0, "P", 21.0, -0.40),
+    ]
+    rows = surface.surface_by_expiry(contracts, spot=100.0)
+    assert rows[0]["put25_iv"] is None
+    assert rows[0]["call25_iv"] is None
+    assert rows[0]["risk_reversal"] is None
+
+
+def test_expiring_today_is_excluded_from_the_surface():
+    contracts = [
+        _surface_contract(100.0, "C", 41.0, 0.55, dte=0, expiry="2026-08-14"),
+        _surface_contract(110.0, "C", 45.0, 0.25, dte=0, expiry="2026-08-14"),
+    ]
+    assert surface.surface_by_expiry(contracts, spot=105.0) == []
+
+
+def test_term_slope_signs_contango_and_backwardation():
+    rising = [{"dte": 30, "atm_iv": 20.0}, {"dte": 90, "atm_iv": 25.0}]
+    assert surface.term_slope(rising)["slope"] == pytest.approx(5.0)
+
+    falling = [{"dte": 30, "atm_iv": 30.0}, {"dte": 90, "atm_iv": 24.0}]
+    assert surface.term_slope(falling)["slope"] == pytest.approx(-6.0)
+
+
+def test_surface_runs_on_the_demo_chain():
+    contracts, ctx = main.process_demo_symbol("SHOP")
+    rows = surface.surface_by_expiry(contracts, ctx["spot"])
+    assert rows
+    assert all(r["atm_iv"] is not None for r in rows)
+    assert [r["dte"] for r in rows] == sorted(r["dte"] for r in rows)
 
 
 def test_session_date_converts_utc_to_the_exchange_day():

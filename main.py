@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from config import DEFAULT_MIN_OI, MAX_SPREAD_PCT, RISK_FREE_RATE
 from analysis import greeks as gk
 from analysis import metrics as mx
+from analysis import surface as surf
 from analysis import volatility as vol
 from data import archive
 from data import fetcher
@@ -222,6 +223,14 @@ def main() -> None:
         ctx["ivr"], ctx["ivp"], ctx["iv_depth"], ctx["days_to_earnings"], ctx["jump"],
     )
     display.print_news(ctx["news"])
+
+    # Built from the full chain, not `filtered` — the display filters exist to
+    # narrow what you read, and applying them here would delete the wings the
+    # skew is measured from.
+    surface_rows = surf.surface_by_expiry(contracts, ctx["spot"])
+    display.print_surface(
+        surface_rows, surf.term_slope(surface_rows), ctx["days_to_earnings"]
+    )
 
     shown = filtered[: args.limit]
     title = f"{ticker} — {len(shown)} of {len(filtered)} contracts passing filters"

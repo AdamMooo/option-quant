@@ -118,6 +118,74 @@ def print_news(items: list[dict]) -> None:
         console.print(f"  [dim]{a['date']}[/dim]  {headline}  [dim]({a['source']})[/dim]", highlight=False)
 
 
+def print_surface(rows: list[dict], slope: dict | None, days_to_earnings: int | None = None) -> None:
+    """Term structure and skew — both self-contained facts about today's chain."""
+    if not rows:
+        return
+
+    console.print()
+    table = Table(
+        title="Volatility surface — ATM term structure and 25-delta skew",
+        box=box.SIMPLE_HEAD,
+        header_style="bold cyan",
+        pad_edge=False,
+    )
+    for name, justify in [
+        ("Expiry", "center"), ("DTE", "right"), ("ATM IV", "right"),
+        ("25d Put", "right"), ("25d Call", "right"),
+        ("Risk rev", "right"), ("Butterfly", "right"), ("Strikes", "right"),
+    ]:
+        table.add_column(name, justify=justify, no_wrap=True)
+
+    spans_earnings = False
+    for r in rows:
+        expiry_cell = r["expiry"]
+        if days_to_earnings is not None and (r.get("dte") or 0) >= days_to_earnings:
+            expiry_cell += "*"
+            spans_earnings = True
+
+        rr = r["risk_reversal"]
+        # Put skew is the normal state, so only an inverted one is worth colour.
+        rr_style = "yellow" if (rr is not None and rr < 0) else ""
+
+        table.add_row(
+            expiry_cell,
+            str(r.get("dte", "")),
+            _fmt(r["atm_iv"], ".1f"),
+            _fmt(r["put25_iv"], ".1f"),
+            _fmt(r["call25_iv"], ".1f"),
+            f"[{rr_style}]{_sign(rr, '.1f')}[/{rr_style}]" if rr_style else _sign(rr, ".1f"),
+            _sign(r["butterfly"], ".1f"),
+            str(r["n_strikes"]),
+        )
+
+    console.print(table)
+
+    if slope:
+        shape = "contango" if slope["slope"] > 0 else "backwardation"
+        style = "green" if slope["slope"] > 0 else "bold red"
+        console.print(
+            f"  Term structure: {slope['near_dte']}d {slope['near_iv']:.1f}%  →  "
+            f"{slope['far_dte']}d {slope['far_iv']:.1f}%   "
+            f"[{style}]{_sign(slope['slope'], '.1f')} vol pts ({shape})[/{style}]",
+            highlight=False,
+        )
+
+    console.print(
+        "  [dim]Risk reversal = 25d put IV minus 25d call IV; positive means the market pays "
+        "more for downside. Butterfly = mean of the 25d wings minus ATM; positive means tails "
+        "priced fatter than lognormal. Both in vol points. IV is interpolated to spot and to "
+        "0.25 delta, not snapped to the nearest strike.[/dim]",
+        highlight=False,
+    )
+    if spans_earnings:
+        console.print(
+            f"  [yellow]*[/yellow] [dim]expiry spans earnings ({days_to_earnings}d out) — "
+            f"a kink here is the event, not a term-structure view.[/dim]",
+            highlight=False,
+        )
+
+
 def print_chain(contracts: list[dict], title: str, days_to_earnings: int | None = None) -> None:
     table = Table(
         title=title,
